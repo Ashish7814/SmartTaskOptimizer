@@ -1,0 +1,6 @@
+@SmartTaskOptimizer.API_HostAddress = http://localhost:5289
+
+GET {{SmartTaskOptimizer.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
