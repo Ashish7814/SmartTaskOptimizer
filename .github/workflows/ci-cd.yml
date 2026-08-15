@@ -1,0 +1,239 @@
+name: CI-CD - SmartTaskOptimizer
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - "feature/**"
+      - "bugfix/**"
+      - "hotfix/**"
+
+  pull_request:
+    branches:
+      - master
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deployment-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  SOLUTION_FILE: "SmartTaskOptimizer.sln"
+  API_PROJECT: "SmartTaskOptimizer.API/SmartTaskOptimizer.API.csproj"
+  PUBLISH_DIRECTORY: "${{ github.workspace }}/publish"
+  ARTIFACT_NAME: "SmartTaskOptimizer-api"
+
+jobs:
+
+  build-test:
+    name: Build and Test
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Validate solution
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${{ env.SOLUTION_FILE }}")) {
+            throw "Solution file '${{ env.SOLUTION_FILE }}' was not found."
+          }
+
+          if (-not (Test-Path "${{ env.API_PROJECT }}")) {
+            throw "API project '${{ env.API_PROJECT }}' was not found."
+          }
+
+      - name: Restore dependencies
+        run: dotnet restore "${{ env.SOLUTION_FILE }}"
+
+      - name: Build Release
+        run: >
+          dotnet build "${{ env.SOLUTION_FILE }}"
+          --configuration Release
+          --no-restore
+          --nologo
+          -warnaserror
+
+      - name: Run automated tests
+        run: >
+          dotnet test "${{ env.SOLUTION_FILE }}"
+          --configuration Release
+          --no-build
+          --no-restore
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory "${{ github.workspace }}/TestResults"
+          --verbosity normal
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_number }}
+          path: "${{ github.workspace }}/TestResults/**/*.trx"
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish production application
+        run: >
+          dotnet publish "${{ env.API_PROJECT }}"
+          --configuration Release
+          --no-restore
+          --output "${{ env.PUBLISH_DIRECTORY }}"
+          --runtime win-x86
+          --self-contained false
+          --nologo
+
+      - name: Validate publish output
+        shell: pwsh
+        run: |
+          $publish = "${{ env.PUBLISH_DIRECTORY }}"
+
+          if (-not (Test-Path $publish)) {
+            throw "Publish directory was not created."
+          }
+
+          if (-not (Test-Path "$publish/SmartTaskOptimizer.API.dll")) {
+            throw "SmartTaskOptimizer.API.dll was not found in the publish output."
+          }
+
+          if (Get-ChildItem $publish -Recurse -Force -Include "*.pfx","*.pem","*.key",".env" -ErrorAction SilentlyContinue) {
+            throw "Potential secret/certificate files were found in the deployment artifact."
+          }
+
+      - name: Create deployment artifact
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "${{ env.PUBLISH_DIRECTORY }}/*" `
+            -DestinationPath "${{ github.workspace }}/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip" `
+            -Force
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
+          path: "${{ github.workspace }}/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
+          if-no-files-found: error
+          retention-days: 30
+
+
+  deploy-production:
+    name: Deploy to MonsterASP.NET
+    needs: build-test
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'push' &&
+        (
+          github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/master'
+        )
+      )
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    environment:
+      name: production
+      url: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
+
+    steps:
+      - name: Download deployment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
+          path: ./deployment
+
+      - name: Extract deployment package
+        shell: bash
+        run: |
+          mkdir -p ./publish
+
+          unzip -q \
+            "./deployment/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip" \
+            -d ./publish
+
+          test -f "./publish/SmartTaskOptimizer.API.dll"
+
+      - name: Deploy to MonsterASP.NET via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.MONSTERASP_FTP_HOST }}
+          username: ${{ secrets.MONSTERASP_FTP_USERNAME }}
+          password: ${{ secrets.MONSTERASP_FTP_PASSWORD }}
+          server-dir: ${{ secrets.MONSTERASP_FTP_PATH }}
+          local-dir: ./publish/
+          protocol: ftp
+          port: 21
+          log-level: standard
+          timeout: 120000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/TestResults/**
+            **/*.pdb
+
+      - name: Wait for application startup
+        shell: bash
+        run: sleep 15
+
+      - name: Verify production health
+        shell: bash
+        env:
+          HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
+        run: |
+          if [ -z "$HEALTHCHECK_URL" ]; then
+            echo "::error::MONSTERASP_HEALTHCHECK_URL is not configured."
+            exit 1
+          fi
+
+          echo "Checking production health endpoint..."
+
+          for attempt in {1..6}; do
+            status_code=$(curl \
+              --silent \
+              --show-error \
+              --output /tmp/health-response.txt \
+              --write-out "%{http_code}" \
+              --max-time 20 \
+              "$HEALTHCHECK_URL" || true)
+
+            if [ "$status_code" = "200" ]; then
+              echo "Production health check passed."
+              exit 0
+            fi
+
+            echo "Health check attempt $attempt failed with HTTP status: $status_code"
+
+            if [ "$attempt" -lt 6 ]; then
+              sleep 10
+            fi
+          done
+
+          echo "::error::Production health check failed."
+          echo "Response:"
+          cat /tmp/health-response.txt 2>/dev/null || true
+          exit 1
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "Deployment completed successfully."
+          echo "Commit: $GITHUB_SHA"
+          echo "Environment: production"
