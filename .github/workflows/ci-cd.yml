@@ -91,11 +91,8 @@ jobs:
             -Path "global.json" `
             -Encoding UTF8
 
-          Write-Host "Created global.json:"
-          Get-Content "global.json"
-
       # --------------------------------------------------------
-      # VERIFY .NET SDK
+      # VERIFY SDK
       # --------------------------------------------------------
 
       - name: Verify .NET SDK
@@ -109,10 +106,8 @@ jobs:
             throw "Expected .NET 8 SDK but found $version"
           }
 
-          Write-Host ".NET 8 SDK is active."
-
       # --------------------------------------------------------
-      # DISPLAY .NET INFORMATION
+      # DISPLAY .NET INFO
       # --------------------------------------------------------
 
       - name: Display .NET information
@@ -135,12 +130,8 @@ jobs:
             throw "API project not found: ${{ env.API_PROJECT }}"
           }
 
-          Write-Host "Solution found:"
-          Write-Host "${{ env.SOLUTION_FILE }}"
-
-          Write-Host ""
-          Write-Host "API project found:"
-          Write-Host "${{ env.API_PROJECT }}"
+          Write-Host "Solution: ${{ env.SOLUTION_FILE }}"
+          Write-Host "API Project: ${{ env.API_PROJECT }}"
 
       # --------------------------------------------------------
       # NUGET CACHE
@@ -157,8 +148,8 @@ jobs:
       # --------------------------------------------------------
       # RESTORE
       #
-      # Runtime is specified here so the API project has
-      # net8.0/win-x86 assets available for publishing.
+      # Runtime is specified here because the API publish
+      # requires net8.0/win-x86 assets.
       # --------------------------------------------------------
 
       - name: Restore dependencies
@@ -171,8 +162,8 @@ jobs:
       # BUILD
       #
       # IMPORTANT:
-      # Do NOT specify --runtime when building the solution.
-      # This avoids NETSDK1134.
+      # No --runtime here because this is a solution build.
+      # This prevents NETSDK1134.
       # --------------------------------------------------------
 
       - name: Build Release
@@ -226,8 +217,8 @@ jobs:
       # --------------------------------------------------------
       # PUBLISH API
       #
-      # Runtime is allowed here because this is an individual
-      # project publish rather than a solution build.
+      # Runtime is specified here because this is an individual
+      # project publish.
       # --------------------------------------------------------
 
       - name: Publish production application
@@ -264,9 +255,6 @@ jobs:
             throw "web.config was not found."
           }
 
-          Write-Host "API DLL found."
-          Write-Host "web.config found."
-
           $secretFiles = Get-ChildItem `
             -Path $publish `
             -Recurse `
@@ -275,13 +263,7 @@ jobs:
             -ErrorAction SilentlyContinue
 
           if ($secretFiles) {
-            Write-Host "Potential sensitive files detected."
-
-            $secretFiles | ForEach-Object {
-              Write-Host $_.FullName
-            }
-
-            throw "Sensitive certificate/key/environment files were found."
+            throw "Sensitive certificate/key/environment files were found in publish output."
           }
 
           Write-Host "Publish output validation successful."
@@ -303,8 +285,6 @@ jobs:
           if (-not (Test-Path $artifactPath)) {
             throw "Deployment artifact was not created."
           }
-
-          Write-Host "Deployment artifact created successfully."
 
       # --------------------------------------------------------
       # UPLOAD DEPLOYMENT ARTIFACT
@@ -366,7 +346,7 @@ jobs:
           $publish = "${{ github.workspace }}/publish"
 
           if (-not (Test-Path $zipFile)) {
-            throw "Deployment ZIP was not found: $zipFile"
+            throw "Deployment ZIP was not found."
           }
 
           if (Test-Path $publish) {
@@ -395,12 +375,6 @@ jobs:
 
       # --------------------------------------------------------
       # DEPLOY USING MONSTERASP.NET WEBDEPLOY
-      #
-      # MonsterASP.NET officially documents these four secrets:
-      # WEBSITE_NAME
-      # SERVER_COMPUTER_NAME
-      # SERVER_USERNAME
-      # SERVER_PASSWORD
       # --------------------------------------------------------
 
       - name: Deploy to MonsterASP.NET via WebDeploy
@@ -413,6 +387,94 @@ jobs:
           source-path: '\publish\'
 
       # --------------------------------------------------------
+      # INSTALL EF CORE CLI
+      # --------------------------------------------------------
+
+      - name: Install EF Core CLI
+        shell: pwsh
+        run: |
+          dotnet tool install --global dotnet-ef --version 8.*
+
+          $toolPath = "$env:USERPROFILE\.dotnet\tools"
+
+          if (-not (Test-Path $toolPath)) {
+            throw "dotnet tools directory was not found."
+          }
+
+          $env:PATH = "$toolPath;$env:PATH"
+
+          dotnet ef --version
+
+      # --------------------------------------------------------
+      # VERIFY PRODUCTION DATABASE CONFIGURATION
+      # --------------------------------------------------------
+
+      - name: Validate production database connection
+        shell: pwsh
+        env:
+          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MONSTERASP_CONNECTION_STRING)) {
+            throw "MONSTERASP_CONNECTION_STRING secret is not configured."
+          }
+
+          Write-Host "Production database connection string is configured."
+
+      # --------------------------------------------------------
+      # CHECK EF CORE MIGRATIONS
+      # --------------------------------------------------------
+
+      - name: Validate EF Core migrations
+        shell: pwsh
+        env:
+          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
+        run: |
+          $toolPath = "$env:USERPROFILE\.dotnet\tools"
+          $env:PATH = "$toolPath;$env:PATH"
+
+          dotnet ef migrations list `
+            --project "${{ env.API_PROJECT }}" `
+            --startup-project "${{ env.API_PROJECT }}" `
+            --configuration Release `
+            --connection "$env:MONSTERASP_CONNECTION_STRING"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "EF Core migration validation failed."
+          }
+
+      # --------------------------------------------------------
+      # APPLY DATABASE MIGRATIONS
+      #
+      # This creates the database if it does not exist,
+      # provided the SQL account has permission.
+      #
+      # It also applies all pending migrations.
+      # --------------------------------------------------------
+
+      - name: Apply EF Core database migrations
+        shell: pwsh
+        env:
+          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
+        run: |
+          $toolPath = "$env:USERPROFILE\.dotnet\tools"
+          $env:PATH = "$toolPath;$env:PATH"
+
+          Write-Host "Applying pending Entity Framework Core migrations..."
+
+          dotnet ef database update `
+            --project "${{ env.API_PROJECT }}" `
+            --startup-project "${{ env.API_PROJECT }}" `
+            --configuration Release `
+            --connection "$env:MONSTERASP_CONNECTION_STRING" `
+            --verbose
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Database migration failed. Deployment is considered unsuccessful."
+          }
+
+          Write-Host "Database migration completed successfully."
+
+      # --------------------------------------------------------
       # WAIT FOR APPLICATION STARTUP
       # --------------------------------------------------------
 
@@ -423,7 +485,7 @@ jobs:
           Start-Sleep -Seconds 20
 
       # --------------------------------------------------------
-      # HEALTH CHECK
+      # PRODUCTION HEALTH CHECK
       # --------------------------------------------------------
 
       - name: Verify production health
@@ -436,18 +498,27 @@ jobs:
           }
 
           Write-Host "Checking production health endpoint..."
+          Write-Host "URL: $env:MONSTERASP_HEALTHCHECK_URL"
 
           for ($attempt = 1; $attempt -le 6; $attempt++) {
+
+            Write-Host ""
+            Write-Host "Health check attempt $attempt..."
 
             try {
 
               $response = Invoke-WebRequest `
                 -Uri $env:MONSTERASP_HEALTHCHECK_URL `
                 -UseBasicParsing `
-                -TimeoutSec 20 `
+                -TimeoutSec 30 `
                 -ErrorAction Stop
 
-              Write-Host "Health check attempt $attempt returned HTTP $($response.StatusCode)"
+              Write-Host "HTTP Status: $($response.StatusCode)"
+
+              if ($response.Content) {
+                Write-Host "Health response:"
+                Write-Host $response.Content
+              }
 
               if ($response.StatusCode -eq 200) {
                 Write-Host "Production health check passed."
@@ -457,9 +528,26 @@ jobs:
             }
             catch {
 
-              Write-Host "Health check attempt $attempt failed."
-              Write-Host $_.Exception.Message
+              Write-Host "Health check failed."
+              Write-Host "Error: $($_.Exception.Message)"
 
+              if ($_.Exception.Response) {
+                try {
+                  $reader = New-Object System.IO.StreamReader(
+                    $_.Exception.Response.GetResponseStream()
+                  )
+
+                  $body = $reader.ReadToEnd()
+
+                  if ($body) {
+                    Write-Host "Server response:"
+                    Write-Host $body
+                  }
+                }
+                catch {
+                  Write-Host "Unable to read error response body."
+                }
+              }
             }
 
             if ($attempt -lt 6) {
@@ -487,4 +575,5 @@ jobs:
           Write-Host "Branch: $env:GITHUB_REF_NAME"
           Write-Host "Environment: production"
           Write-Host "Health check: $env:MONSTERASP_HEALTHCHECK_URL"
+          Write-Host "Database migrations: applied"
           Write-Host "============================================"
