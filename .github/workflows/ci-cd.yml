@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-deployment-${{ github.ref }}
+  group: smarttask-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -32,35 +32,73 @@ env:
 
 jobs:
 
+  # ============================================================
+  # BUILD, TEST AND PUBLISH
+  # ============================================================
+
   build-test:
-    name: Build and Test
+    name: Build, Test and Publish
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Setup .NET 8
+      # --------------------------------------------------------
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-          cache: true
-          cache-dependency-path: "**/packages.lock.json"
 
-      - name: Validate solution
+      # --------------------------------------------------------
+      # NuGet Cache
+      # --------------------------------------------------------
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.config', '**/nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # --------------------------------------------------------
+      # Validate project structure
+      # --------------------------------------------------------
+
+      - name: Validate project structure
         shell: pwsh
         run: |
           if (-not (Test-Path "${{ env.SOLUTION_FILE }}")) {
-            throw "Solution file '${{ env.SOLUTION_FILE }}' was not found."
+            throw "Solution file not found: ${{ env.SOLUTION_FILE }}"
           }
 
           if (-not (Test-Path "${{ env.API_PROJECT }}")) {
-            throw "API project '${{ env.API_PROJECT }}' was not found."
+            throw "API project not found: ${{ env.API_PROJECT }}"
           }
+
+          Write-Host "Solution found: ${{ env.SOLUTION_FILE }}"
+          Write-Host "API project found: ${{ env.API_PROJECT }}"
+
+      # --------------------------------------------------------
+      # Restore
+      # --------------------------------------------------------
 
       - name: Restore dependencies
         run: dotnet restore "${{ env.SOLUTION_FILE }}"
+
+      # --------------------------------------------------------
+      # Build
+      # --------------------------------------------------------
 
       - name: Build Release
         run: >
@@ -70,6 +108,10 @@ jobs:
           --nologo
           -warnaserror
 
+      # --------------------------------------------------------
+      # Test
+      # --------------------------------------------------------
+
       - name: Run automated tests
         run: >
           dotnet test "${{ env.SOLUTION_FILE }}"
@@ -78,7 +120,12 @@ jobs:
           --no-restore
           --logger "trx;LogFileName=test-results.trx"
           --results-directory "${{ github.workspace }}/TestResults"
+          --collect:"XPlat Code Coverage"
           --verbosity normal
+
+      # --------------------------------------------------------
+      # Upload test results
+      # --------------------------------------------------------
 
       - name: Upload test results
         if: always()
@@ -88,6 +135,26 @@ jobs:
           path: "${{ github.workspace }}/TestResults/**/*.trx"
           if-no-files-found: warn
           retention-days: 14
+
+      # --------------------------------------------------------
+      # Upload code coverage
+      # --------------------------------------------------------
+
+      - name: Upload code coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_number }}
+          path: |
+            ${{ github.workspace }}/TestResults/**/coverage.cobertura.xml
+            ${{ github.workspace }}/TestResults/**/coverage.opencover.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      # --------------------------------------------------------
+      # Publish ASP.NET Core application
+      # MonsterASP Free plan uses x86
+      # --------------------------------------------------------
 
       - name: Publish production application
         run: >
@@ -99,6 +166,10 @@ jobs:
           --self-contained false
           --nologo
 
+      # --------------------------------------------------------
+      # Validate publish output
+      # --------------------------------------------------------
+
       - name: Validate publish output
         shell: pwsh
         run: |
@@ -108,21 +179,59 @@ jobs:
             throw "Publish directory was not created."
           }
 
-          if (-not (Test-Path "$publish/SmartTaskOptimizer.API.dll")) {
-            throw "SmartTaskOptimizer.API.dll was not found in the publish output."
+          $apiDll = Join-Path $publish "SmartTaskOptimizer.API.dll"
+          $webConfig = Join-Path $publish "web.config"
+
+          if (-not (Test-Path $apiDll)) {
+            throw "SmartTaskOptimizer.API.dll was not found in publish output."
           }
 
-          if (Get-ChildItem $publish -Recurse -Force -Include "*.pfx","*.pem","*.key",".env" -ErrorAction SilentlyContinue) {
-            throw "Potential secret/certificate files were found in the deployment artifact."
+          if (-not (Test-Path $webConfig)) {
+            throw "web.config was not found in publish output."
           }
+
+          $secretFiles = Get-ChildItem `
+            -Path $publish `
+            -Recurse `
+            -Force `
+            -Include "*.pfx", "*.pem", "*.key", ".env" `
+            -ErrorAction SilentlyContinue
+
+          if ($secretFiles) {
+            Write-Host "Potential sensitive files detected:"
+
+            $secretFiles | ForEach-Object {
+              Write-Host $_.FullName
+            }
+
+            throw "Sensitive certificate/key/environment files were found in publish output."
+          }
+
+          Write-Host "Publish output validation successful."
+
+      # --------------------------------------------------------
+      # Create deployment ZIP
+      # --------------------------------------------------------
 
       - name: Create deployment artifact
         shell: pwsh
         run: |
+          $artifactPath = "${{ github.workspace }}/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
+
           Compress-Archive `
             -Path "${{ env.PUBLISH_DIRECTORY }}/*" `
-            -DestinationPath "${{ github.workspace }}/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip" `
+            -DestinationPath $artifactPath `
             -Force
+
+          if (-not (Test-Path $artifactPath)) {
+            throw "Deployment artifact was not created."
+          }
+
+          Write-Host "Deployment artifact created successfully."
+
+      # --------------------------------------------------------
+      # Upload deployment artifact
+      # --------------------------------------------------------
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@v4
@@ -133,9 +242,14 @@ jobs:
           retention-days: 30
 
 
+  # ============================================================
+  # PRODUCTION DEPLOYMENT
+  # ============================================================
+
   deploy-production:
     name: Deploy to MonsterASP.NET
     needs: build-test
+
     if: >
       github.event_name == 'workflow_dispatch' ||
       (
@@ -147,29 +261,56 @@ jobs:
       )
 
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     environment:
       name: production
-      url: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
 
     steps:
+
+      # --------------------------------------------------------
+      # Download deployment artifact
+      # --------------------------------------------------------
+
       - name: Download deployment artifact
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: ./deployment
 
+      # --------------------------------------------------------
+      # Extract deployment package
+      # --------------------------------------------------------
+
       - name: Extract deployment package
         shell: bash
         run: |
           mkdir -p ./publish
 
-          unzip -q \
-            "./deployment/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip" \
-            -d ./publish
+          ZIP_FILE="./deployment/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
 
-          test -f "./publish/SmartTaskOptimizer.API.dll"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::Deployment ZIP was not found: $ZIP_FILE"
+            exit 1
+          fi
+
+          unzip -q "$ZIP_FILE" -d ./publish
+
+          if [ ! -f "./publish/SmartTaskOptimizer.API.dll" ]; then
+            echo "::error::SmartTaskOptimizer.API.dll was not found."
+            exit 1
+          fi
+
+          if [ ! -f "./publish/web.config" ]; then
+            echo "::error::web.config was not found."
+            exit 1
+          fi
+
+          echo "Deployment package extracted successfully."
+
+      # --------------------------------------------------------
+      # Deploy to MonsterASP.NET using FTP
+      # --------------------------------------------------------
 
       - name: Deploy to MonsterASP.NET via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
@@ -183,22 +324,34 @@ jobs:
           port: 21
           log-level: standard
           timeout: 120000
+
           exclude: |
             **/.git*
             **/.git*/**
             **/TestResults/**
             **/*.pdb
+            **/*.zip
+
+      # --------------------------------------------------------
+      # Wait for application startup
+      # --------------------------------------------------------
 
       - name: Wait for application startup
         shell: bash
-        run: sleep 15
+        run: |
+          echo "Waiting for MonsterASP.NET application to start..."
+          sleep 15
+
+      # --------------------------------------------------------
+      # Production health check
+      # --------------------------------------------------------
 
       - name: Verify production health
         shell: bash
         env:
-          HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
+          MONSTERASP_HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
         run: |
-          if [ -z "$HEALTHCHECK_URL" ]; then
+          if [ -z "$MONSTERASP_HEALTHCHECK_URL" ]; then
             echo "::error::MONSTERASP_HEALTHCHECK_URL is not configured."
             exit 1
           fi
@@ -206,34 +359,51 @@ jobs:
           echo "Checking production health endpoint..."
 
           for attempt in {1..6}; do
+
             status_code=$(curl \
               --silent \
               --show-error \
               --output /tmp/health-response.txt \
               --write-out "%{http_code}" \
               --max-time 20 \
-              "$HEALTHCHECK_URL" || true)
+              "$MONSTERASP_HEALTHCHECK_URL" || true)
+
+            echo "Health check attempt $attempt returned HTTP $status_code"
 
             if [ "$status_code" = "200" ]; then
               echo "Production health check passed."
               exit 0
             fi
 
-            echo "Health check attempt $attempt failed with HTTP status: $status_code"
-
             if [ "$attempt" -lt 6 ]; then
+              echo "Waiting 10 seconds before retry..."
               sleep 10
             fi
+
           done
 
           echo "::error::Production health check failed."
-          echo "Response:"
+
+          echo "Health check response:"
           cat /tmp/health-response.txt 2>/dev/null || true
+
           exit 1
+
+      # --------------------------------------------------------
+      # Deployment summary
+      # --------------------------------------------------------
 
       - name: Deployment summary
         if: success()
+        shell: bash
+        env:
+          MONSTERASP_HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
         run: |
-          echo "Deployment completed successfully."
+          echo "============================================"
+          echo "SmartTaskOptimizer deployment successful"
+          echo "============================================"
           echo "Commit: $GITHUB_SHA"
+          echo "Branch: $GITHUB_REF_NAME"
           echo "Environment: production"
+          echo "Health check: $MONSTERASP_HEALTHCHECK_URL"
+          echo "============================================"
