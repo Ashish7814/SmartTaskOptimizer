@@ -262,6 +262,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
+using FluentValidation;
 
 var builder = WebApplication.CreateBuilder(args);
 
