@@ -26,9 +26,15 @@ concurrency:
 env:
   DOTNET_VERSION: "8.0.x"
   DOTNET_RUNTIME: "win-x86"
+
   SOLUTION_FILE: "SmartTaskOptimizer.sln"
+
   API_PROJECT: "SmartTaskOptimizer.API/SmartTaskOptimizer.API.csproj"
+
+  INFRASTRUCTURE_PROJECT: "SmartTaskOptimizer.Infrastructure/SmartTaskOptimizer.Infrastructure.csproj"
+
   PUBLISH_DIRECTORY: "${{ github.workspace }}/publish"
+
   ARTIFACT_NAME: "SmartTaskOptimizer-api"
 
 jobs:
@@ -44,17 +50,25 @@ jobs:
 
     steps:
 
+      # --------------------------------------------------------
+      # CHECKOUT
+      # --------------------------------------------------------
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # --------------------------------------------------------
-      # .NET 8
+      # SETUP .NET 8
       # --------------------------------------------------------
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # --------------------------------------------------------
+      # FORCE .NET 8 SDK
+      # --------------------------------------------------------
 
       - name: Configure .NET 8 SDK
         shell: pwsh
@@ -83,6 +97,13 @@ jobs:
             -Path "global.json" `
             -Encoding UTF8
 
+          Write-Host "Created global.json:"
+          Get-Content "global.json"
+
+      # --------------------------------------------------------
+      # VERIFY .NET
+      # --------------------------------------------------------
+
       - name: Verify .NET SDK
         shell: pwsh
         run: |
@@ -94,8 +115,13 @@ jobs:
             throw "Expected .NET 8 SDK but found $version"
           }
 
+      - name: Display .NET information
+        shell: pwsh
+        run: |
+          dotnet --info
+
       # --------------------------------------------------------
-      # Validate project
+      # VALIDATE PROJECT STRUCTURE
       # --------------------------------------------------------
 
       - name: Validate project structure
@@ -109,11 +135,16 @@ jobs:
             throw "API project not found: ${{ env.API_PROJECT }}"
           }
 
+          if (-not (Test-Path "${{ env.INFRASTRUCTURE_PROJECT }}")) {
+            throw "Infrastructure project not found: ${{ env.INFRASTRUCTURE_PROJECT }}"
+          }
+
           Write-Host "Solution found."
           Write-Host "API project found."
+          Write-Host "Infrastructure project found."
 
       # --------------------------------------------------------
-      # NuGet cache
+      # NUGET CACHE
       # --------------------------------------------------------
 
       - name: Cache NuGet packages
@@ -125,17 +156,22 @@ jobs:
             ${{ runner.os }}-nuget-
 
       # --------------------------------------------------------
-      # Restore
+      # RESTORE
+      #
+      # Runtime is required for the win-x86 publish assets.
       # --------------------------------------------------------
 
-      - name: Restore dependencies
+      - name: Restore solution
         run: >
           dotnet restore "${{ env.SOLUTION_FILE }}"
           --runtime "${{ env.DOTNET_RUNTIME }}"
           --force
 
       # --------------------------------------------------------
-      # Build
+      # BUILD
+      #
+      # Do NOT specify --runtime here.
+      # Solution-level build + RID causes NETSDK1134.
       # --------------------------------------------------------
 
       - name: Build Release
@@ -146,7 +182,7 @@ jobs:
           --nologo
 
       # --------------------------------------------------------
-      # Tests
+      # TEST
       # --------------------------------------------------------
 
       - name: Run automated tests
@@ -160,6 +196,10 @@ jobs:
           --collect:"XPlat Code Coverage"
           --verbosity normal
 
+      # --------------------------------------------------------
+      # TEST RESULTS
+      # --------------------------------------------------------
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -168,6 +208,10 @@ jobs:
           path: "${{ github.workspace }}/TestResults/**/*.trx"
           if-no-files-found: warn
           retention-days: 14
+
+      # --------------------------------------------------------
+      # CODE COVERAGE
+      # --------------------------------------------------------
 
       - name: Upload code coverage
         if: always()
@@ -179,7 +223,7 @@ jobs:
           retention-days: 14
 
       # --------------------------------------------------------
-      # Publish
+      # PUBLISH API
       # --------------------------------------------------------
 
       - name: Publish production application
@@ -193,7 +237,7 @@ jobs:
           --nologo
 
       # --------------------------------------------------------
-      # Validate publish
+      # VALIDATE PUBLISH OUTPUT
       # --------------------------------------------------------
 
       - name: Validate publish output
@@ -221,13 +265,13 @@ jobs:
             -ErrorAction SilentlyContinue
 
           if ($secretFiles) {
-            throw "Sensitive files were found in publish output."
+            throw "Sensitive certificate/key/environment files were found in publish output."
           }
 
           Write-Host "Publish output validation successful."
 
       # --------------------------------------------------------
-      # Create deployment artifact
+      # CREATE DEPLOYMENT ZIP
       # --------------------------------------------------------
 
       - name: Create deployment artifact
@@ -243,6 +287,12 @@ jobs:
           if (-not (Test-Path $artifactPath)) {
             throw "Deployment artifact was not created."
           }
+
+          Write-Host "Deployment artifact created successfully."
+
+      # --------------------------------------------------------
+      # UPLOAD DEPLOYMENT ARTIFACT
+      # --------------------------------------------------------
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@v4
@@ -279,27 +329,28 @@ jobs:
 
     steps:
 
-      # ========================================================
+      # --------------------------------------------------------
       # CHECKOUT SOURCE
       #
-      # Required for EF Core migrations.
-      # ========================================================
+      # Required because EF Core migrations are in the
+      # Infrastructure project.
+      # --------------------------------------------------------
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ========================================================
+      # --------------------------------------------------------
       # SETUP .NET 8
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # ========================================================
+      # --------------------------------------------------------
       # CONFIGURE .NET 8
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Configure .NET 8 SDK
         shell: pwsh
@@ -328,6 +379,10 @@ jobs:
             -Path "global.json" `
             -Encoding UTF8
 
+      # --------------------------------------------------------
+      # VERIFY .NET
+      # --------------------------------------------------------
+
       - name: Verify .NET SDK
         shell: pwsh
         run: |
@@ -339,31 +394,27 @@ jobs:
             throw "Expected .NET 8 SDK but found $version"
           }
 
-      # ========================================================
-      # VALIDATE API PROJECT
-      # ========================================================
+      # --------------------------------------------------------
+      # VALIDATE MIGRATION PROJECTS
+      # --------------------------------------------------------
 
-      - name: Validate API project for migrations
+      - name: Validate EF Core project structure
         shell: pwsh
         run: |
-          $project = "${{ env.API_PROJECT }}"
-
-          Write-Host "Current directory:"
-          Get-Location
-
-          Write-Host ""
-          Write-Host "Checking project:"
-          Write-Host $project
-
-          if (-not (Test-Path $project)) {
-            throw "API project does not exist: $project"
+          if (-not (Test-Path "${{ env.API_PROJECT }}")) {
+            throw "API project not found: ${{ env.API_PROJECT }}"
           }
 
-          Write-Host "API project exists."
+          if (-not (Test-Path "${{ env.INFRASTRUCTURE_PROJECT }}")) {
+            throw "Infrastructure project not found: ${{ env.INFRASTRUCTURE_PROJECT }}"
+          }
 
-      # ========================================================
-      # CACHE NUGET
-      # ========================================================
+          Write-Host "API startup project found."
+          Write-Host "Infrastructure migration project found."
+
+      # --------------------------------------------------------
+      # NUGET CACHE
+      # --------------------------------------------------------
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -371,24 +422,22 @@ jobs:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-migrations-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.config', '**/nuget.config') }}
           restore-keys: |
+            ${{ runner.os }}-nuget-migrations-
             ${{ runner.os }}-nuget-
 
-      # ========================================================
-      # RESTORE API PROJECT FOR EF
-      #
-      # This is required because the deployment job has a fresh
-      # runner and therefore has no project.assets.json.
-      # ========================================================
+      # --------------------------------------------------------
+      # RESTORE SOLUTION FOR EF
+      # --------------------------------------------------------
 
-      - name: Restore API project for EF Core
+      - name: Restore solution for EF Core
         run: >
-          dotnet restore "${{ env.API_PROJECT }}"
+          dotnet restore "${{ env.SOLUTION_FILE }}"
           --runtime "${{ env.DOTNET_RUNTIME }}"
           --force
 
-      # ========================================================
+      # --------------------------------------------------------
       # INSTALL EF CORE CLI
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Install EF Core CLI
         shell: pwsh
@@ -400,13 +449,32 @@ jobs:
 
           $toolPath = "$env:USERPROFILE\.dotnet\tools"
 
+          if (-not (Test-Path $toolPath)) {
+            throw "dotnet tools directory was not found."
+          }
+
           $env:PATH = "$toolPath;$env:PATH"
 
           dotnet ef --version
 
-      # ========================================================
+      # --------------------------------------------------------
+      # VALIDATE PRODUCTION DATABASE SECRET
+      # --------------------------------------------------------
+
+      - name: Validate production database configuration
+        shell: pwsh
+        env:
+          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MONSTERASP_CONNECTION_STRING)) {
+            throw "MONSTERASP_CONNECTION_STRING is not configured."
+          }
+
+          Write-Host "Production database connection string is configured."
+
+      # --------------------------------------------------------
       # DOWNLOAD DEPLOYMENT ARTIFACT
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Download deployment artifact
         uses: actions/download-artifact@v4
@@ -414,9 +482,9 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: ./deployment
 
-      # ========================================================
+      # --------------------------------------------------------
       # EXTRACT DEPLOYMENT PACKAGE
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Extract deployment package
         shell: pwsh
@@ -452,9 +520,9 @@ jobs:
 
           Write-Host "Deployment package extracted successfully."
 
-      # ========================================================
-      # DEPLOY TO MONSTERASP.NET USING WEBDEPLOY
-      # ========================================================
+      # --------------------------------------------------------
+      # DEPLOY TO MONSTERASP.NET
+      # --------------------------------------------------------
 
       - name: Deploy to MonsterASP.NET via WebDeploy
         uses: rasmusbuchholdt/simply-web-deploy@2.1.0
@@ -465,24 +533,12 @@ jobs:
           server-password: ${{ secrets.SERVER_PASSWORD }}
           source-path: '\publish\'
 
-      # ========================================================
-      # VALIDATE DATABASE SECRET
-      # ========================================================
-
-      - name: Validate production database configuration
-        shell: pwsh
-        env:
-          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:MONSTERASP_CONNECTION_STRING)) {
-            throw "MONSTERASP_CONNECTION_STRING is not configured."
-          }
-
-          Write-Host "Production database connection string is configured."
-
-      # ========================================================
-      # CHECK EF MIGRATIONS
-      # ========================================================
+      # --------------------------------------------------------
+      # VALIDATE EF MIGRATIONS
+      #
+      # --project = Infrastructure
+      # --startup-project = API
+      # --------------------------------------------------------
 
       - name: Validate EF Core migrations
         shell: pwsh
@@ -495,7 +551,7 @@ jobs:
           Write-Host "Checking EF Core migrations..."
 
           dotnet ef migrations list `
-            --project "${{ env.API_PROJECT }}" `
+            --project "${{ env.INFRASTRUCTURE_PROJECT }}" `
             --startup-project "${{ env.API_PROJECT }}" `
             --configuration Release `
             --connection "$env:MONSTERASP_CONNECTION_STRING"
@@ -506,14 +562,9 @@ jobs:
 
           Write-Host "EF Core migration validation successful."
 
-      # ========================================================
+      # --------------------------------------------------------
       # APPLY DATABASE MIGRATIONS
-      #
-      # Creates database if it does not exist, provided the
-      # database user has sufficient permissions.
-      #
-      # Applies all pending migrations.
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Apply EF Core database migrations
         shell: pwsh
@@ -526,7 +577,7 @@ jobs:
           Write-Host "Applying EF Core database migrations..."
 
           dotnet ef database update `
-            --project "${{ env.API_PROJECT }}" `
+            --project "${{ env.INFRASTRUCTURE_PROJECT }}" `
             --startup-project "${{ env.API_PROJECT }}" `
             --configuration Release `
             --connection "$env:MONSTERASP_CONNECTION_STRING"
@@ -537,9 +588,9 @@ jobs:
 
           Write-Host "Database migration completed successfully."
 
-      # ========================================================
+      # --------------------------------------------------------
       # WAIT FOR APPLICATION STARTUP
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Wait for application startup
         shell: pwsh
@@ -547,9 +598,9 @@ jobs:
           Write-Host "Waiting for MonsterASP.NET application startup..."
           Start-Sleep -Seconds 20
 
-      # ========================================================
-      # HEALTH CHECK
-      # ========================================================
+      # --------------------------------------------------------
+      # PRODUCTION HEALTH CHECK
+      # --------------------------------------------------------
 
       - name: Verify production health
         shell: pwsh
@@ -591,7 +642,7 @@ jobs:
             catch {
 
               Write-Host "Health check failed."
-              Write-Host $_.Exception.Message
+              Write-Host "Error: $($_.Exception.Message)"
 
               if ($_.Exception.Response) {
                 try {
@@ -620,13 +671,15 @@ jobs:
 
           throw "Production health check failed after 6 attempts."
 
-      # ========================================================
+      # --------------------------------------------------------
       # DEPLOYMENT SUMMARY
-      # ========================================================
+      # --------------------------------------------------------
 
       - name: Deployment summary
         if: success()
         shell: pwsh
+        env:
+          MONSTERASP_HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
         run: |
           Write-Host "============================================"
           Write-Host "SmartTaskOptimizer deployment successful"
