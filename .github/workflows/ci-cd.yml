@@ -44,30 +44,25 @@ jobs:
 
     steps:
 
-      # --------------------------------------------------------
+      # ========================================================
       # CHECKOUT
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------
+      # ========================================================
       # SETUP .NET 8
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # --------------------------------------------------------
+      # ========================================================
       # SELECT .NET 8 SDK
-      #
-      # GitHub runners may have .NET 9/10 installed and can
-      # otherwise select the newest SDK automatically.
-      # This creates global.json so all subsequent dotnet
-      # commands use the installed .NET 8 SDK.
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Configure .NET 8 SDK
         shell: pwsh
@@ -95,40 +90,29 @@ jobs:
           $globalJson | Set-Content -Path "global.json" -Encoding UTF8
 
           Write-Host ""
-          Write-Host "Created global.json:"
+          Write-Host "global.json:"
           Get-Content "global.json"
 
-      # --------------------------------------------------------
-      # VERIFY ACTIVE SDK
-      # --------------------------------------------------------
+      # ========================================================
+      # VERIFY SDK
+      # ========================================================
 
       - name: Verify .NET SDK
         shell: pwsh
         run: |
-          Write-Host "Active .NET SDK:"
-          dotnet --version
-
           $version = dotnet --version
+
+          Write-Host "Active .NET SDK: $version"
 
           if (-not $version.StartsWith("8.")) {
             throw "Expected .NET 8 SDK but found $version"
           }
 
-          Write-Host ""
           Write-Host ".NET 8 SDK is active."
 
-      # --------------------------------------------------------
-      # DISPLAY .NET INFORMATION
-      # --------------------------------------------------------
-
-      - name: Display .NET information
-        shell: pwsh
-        run: |
-          dotnet --info
-
-      # --------------------------------------------------------
-      # VALIDATE PROJECT STRUCTURE
-      # --------------------------------------------------------
+      # ========================================================
+      # PROJECT STRUCTURE
+      # ========================================================
 
       - name: Validate project structure
         shell: pwsh
@@ -148,9 +132,9 @@ jobs:
           Write-Host "API project found:"
           Write-Host "${{ env.API_PROJECT }}"
 
-      # --------------------------------------------------------
+      # ========================================================
       # NUGET CACHE
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -160,13 +144,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      # --------------------------------------------------------
+      # ========================================================
       # RESTORE
       #
-      # IMPORTANT:
-      # --runtime win-x86 creates the required
-      # net8.0/win-x86 target inside project.assets.json.
-      # --------------------------------------------------------
+      # Runtime is specified here because publish requires
+      # net8.0/win-x86 assets.
+      # ========================================================
 
       - name: Restore dependencies
         run: >
@@ -174,21 +157,26 @@ jobs:
           --runtime "${{ env.DOTNET_RUNTIME }}"
           --force
 
-      # --------------------------------------------------------
+      # ========================================================
       # BUILD
-      # --------------------------------------------------------
+      #
+      # IMPORTANT:
+      # Do NOT specify --runtime here because this is a
+      # solution-level build.
+      # ========================================================
 
       - name: Build Release
         run: >
           dotnet build "${{ env.SOLUTION_FILE }}"
           --configuration Release
-          --runtime "${{ env.DOTNET_RUNTIME }}"
           --no-restore
           --nologo
 
-      # --------------------------------------------------------
+      # ========================================================
       # TEST
-      # --------------------------------------------------------
+      #
+      # No --runtime here because this is solution-level testing.
+      # ========================================================
 
       - name: Run automated tests
         run: >
@@ -201,9 +189,9 @@ jobs:
           --collect:"XPlat Code Coverage"
           --verbosity normal
 
-      # --------------------------------------------------------
+      # ========================================================
       # TEST RESULTS
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Upload test results
         if: always()
@@ -214,9 +202,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # --------------------------------------------------------
+      # ========================================================
       # CODE COVERAGE
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Upload code coverage
         if: always()
@@ -227,12 +215,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # --------------------------------------------------------
-      # PUBLISH
+      # ========================================================
+      # PUBLISH API
       #
-      # Restore and publish use the same runtime:
-      # net8.0/win-x86
-      # --------------------------------------------------------
+      # Runtime is specified here because this is an individual
+      # project publish, not a solution build.
+      # ========================================================
 
       - name: Publish production application
         run: >
@@ -244,9 +232,9 @@ jobs:
           --self-contained false
           --nologo
 
-      # --------------------------------------------------------
+      # ========================================================
       # VALIDATE PUBLISH OUTPUT
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Validate publish output
         shell: pwsh
@@ -268,6 +256,9 @@ jobs:
             throw "web.config was not found in publish output."
           }
 
+          Write-Host "API DLL found."
+          Write-Host "web.config found."
+
           $secretFiles = Get-ChildItem `
             -Path $publish `
             -Recurse `
@@ -276,7 +267,7 @@ jobs:
             -ErrorAction SilentlyContinue
 
           if ($secretFiles) {
-            Write-Host "Potential sensitive files detected."
+            Write-Host "Potential sensitive files detected:"
 
             $secretFiles | ForEach-Object {
               Write-Host $_.FullName
@@ -287,9 +278,9 @@ jobs:
 
           Write-Host "Publish output validation successful."
 
-      # --------------------------------------------------------
+      # ========================================================
       # CREATE DEPLOYMENT ZIP
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Create deployment artifact
         shell: pwsh
@@ -305,11 +296,12 @@ jobs:
             throw "Deployment artifact was not created."
           }
 
-          Write-Host "Deployment artifact created successfully."
+          Write-Host "Deployment artifact:"
+          Write-Host $artifactPath
 
-      # --------------------------------------------------------
+      # ========================================================
       # UPLOAD DEPLOYMENT ARTIFACT
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@v4
@@ -346,9 +338,9 @@ jobs:
 
     steps:
 
-      # --------------------------------------------------------
+      # ========================================================
       # DOWNLOAD ARTIFACT
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Download deployment artifact
         uses: actions/download-artifact@v4
@@ -356,9 +348,9 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: ./deployment
 
-      # --------------------------------------------------------
-      # EXTRACT DEPLOYMENT PACKAGE
-      # --------------------------------------------------------
+      # ========================================================
+      # EXTRACT PACKAGE
+      # ========================================================
 
       - name: Extract deployment package
         shell: bash
@@ -370,7 +362,7 @@ jobs:
           ZIP_FILE="./deployment/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "::error::Deployment ZIP was not found: $ZIP_FILE"
+            echo "::error::Deployment ZIP was not found."
             exit 1
           fi
 
@@ -388,10 +380,9 @@ jobs:
 
           echo "Deployment package extracted successfully."
 
-      # --------------------------------------------------------
-      # DEPLOY TO MONSTERASP.NET
-      # FTP
-      # --------------------------------------------------------
+      # ========================================================
+      # FTP DEPLOYMENT
+      # ========================================================
 
       - name: Deploy to MonsterASP.NET via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
@@ -413,9 +404,9 @@ jobs:
             **/*.pdb
             **/*.zip
 
-      # --------------------------------------------------------
+      # ========================================================
       # WAIT FOR APPLICATION STARTUP
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Wait for application startup
         shell: bash
@@ -423,9 +414,9 @@ jobs:
           echo "Waiting for MonsterASP.NET application startup..."
           sleep 20
 
-      # --------------------------------------------------------
-      # HEALTH CHECK
-      # --------------------------------------------------------
+      # ========================================================
+      # PRODUCTION HEALTH CHECK
+      # ========================================================
 
       - name: Verify production health
         shell: bash
@@ -472,9 +463,9 @@ jobs:
 
           exit 1
 
-      # --------------------------------------------------------
+      # ========================================================
       # DEPLOYMENT SUMMARY
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Deployment summary
         if: success()
