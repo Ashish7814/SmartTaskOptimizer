@@ -3,7 +3,503 @@ name: CI-CD - SmartTaskOptimizer
 on:
   push:
     branches:
+      - mastername: CI-CD - SmartTaskOptimizer
+
+on:
+  push:
+    branches:
       - master
+      - main
+      - "feature/**"
+      - "bugfix/**"
+      - "hotfix/**"
+
+  pull_request:
+    branches:
+      - master
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smarttask-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  DOTNET_RUNTIME: "win-x86"
+  SOLUTION_FILE: "SmartTaskOptimizer.sln"
+  API_PROJECT: "SmartTaskOptimizer.API/SmartTaskOptimizer.API.csproj"
+  PUBLISH_DIRECTORY: "${{ github.workspace }}/publish"
+  ARTIFACT_NAME: "SmartTaskOptimizer-api"
+
+jobs:
+
+  # ============================================================
+  # BUILD, TEST AND PUBLISH
+  # ============================================================
+
+  build-test:
+    name: Build, Test and Publish
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Setup .NET 8
+      # --------------------------------------------------------
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # --------------------------------------------------------
+      # Verify installed .NET SDK
+      # --------------------------------------------------------
+
+      - name: Verify .NET SDK
+        shell: pwsh
+        run: |
+          Write-Host "Installed .NET SDKs:"
+          dotnet --list-sdks
+
+          Write-Host ""
+          Write-Host "Active .NET SDK:"
+          dotnet --version
+
+          $version = dotnet --version
+
+          if (-not $version.StartsWith("8.")) {
+            throw "Expected .NET 8 SDK, but found SDK $version"
+          }
+
+      # --------------------------------------------------------
+      # Create global.json using installed .NET 8 SDK
+      # --------------------------------------------------------
+
+      - name: Create .NET 8 global.json
+        shell: pwsh
+        run: |
+          $sdkOutput = dotnet --list-sdks |
+            Select-String '^8\.0\.' |
+            Select-Object -Last 1
+
+          if (-not $sdkOutput) {
+            throw "No .NET 8 SDK was found."
+          }
+
+          $sdkVersion = ($sdkOutput.ToString().Trim() -split '\s+')[0]
+
+          Write-Host "Using .NET 8 SDK: $sdkVersion"
+
+          $globalJson = @{
+            sdk = @{
+              version = $sdkVersion
+              rollForward = "latestPatch"
+              allowPrerelease = $false
+            }
+          } | ConvertTo-Json -Depth 3
+
+          $globalJson | Set-Content -Path "global.json" -Encoding UTF8
+
+          Write-Host ""
+          Write-Host "Generated global.json:"
+          Get-Content "global.json"
+
+      # --------------------------------------------------------
+      # Verify solution/project
+      # --------------------------------------------------------
+
+      - name: Validate project structure
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${{ env.SOLUTION_FILE }}")) {
+            throw "Solution file not found: ${{ env.SOLUTION_FILE }}"
+          }
+
+          if (-not (Test-Path "${{ env.API_PROJECT }}")) {
+            throw "API project not found: ${{ env.API_PROJECT }}"
+          }
+
+          Write-Host "Solution:"
+          Write-Host "${{ env.SOLUTION_FILE }}"
+
+          Write-Host ""
+          Write-Host "API project:"
+          Write-Host "${{ env.API_PROJECT }}"
+
+      # --------------------------------------------------------
+      # Ensure win-x86 is configured for the API project
+      # --------------------------------------------------------
+
+      - name: Verify RuntimeIdentifier configuration
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content "${{ env.API_PROJECT }}"
+
+          $runtimeIdentifiers = @(
+            $project.Project.PropertyGroup.RuntimeIdentifiers
+          )
+
+          $runtimeIdentifier = $runtimeIdentifiers -join ";"
+
+          Write-Host "Configured RuntimeIdentifiers: $runtimeIdentifier"
+
+          if ($runtimeIdentifier -notmatch "win-x86") {
+            Write-Host ""
+            Write-Host "WARNING: win-x86 is not explicitly configured in the project."
+            Write-Host "The workflow will still restore using --runtime win-x86."
+            Write-Host "For long-term project configuration, add:"
+            Write-Host "<RuntimeIdentifiers>win-x86</RuntimeIdentifiers>"
+          }
+
+      # --------------------------------------------------------
+      # NuGet cache
+      # --------------------------------------------------------
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.config', '**/nuget.config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # --------------------------------------------------------
+      # Restore
+      # IMPORTANT:
+      # Runtime is specified here so project.assets.json contains
+      # net8.0/win-x86.
+      # --------------------------------------------------------
+
+      - name: Restore dependencies
+        run: >
+          dotnet restore "${{ env.SOLUTION_FILE }}"
+          --runtime "${{ env.DOTNET_RUNTIME }}"
+          --force
+
+      # --------------------------------------------------------
+      # Build
+      # --------------------------------------------------------
+
+      - name: Build Release
+        run: >
+          dotnet build "${{ env.SOLUTION_FILE }}"
+          --configuration Release
+          --runtime "${{ env.DOTNET_RUNTIME }}"
+          --no-restore
+          --nologo
+          -warnaserror
+
+      # --------------------------------------------------------
+      # Run tests
+      # --------------------------------------------------------
+
+      - name: Run automated tests
+        run: >
+          dotnet test "${{ env.SOLUTION_FILE }}"
+          --configuration Release
+          --no-build
+          --no-restore
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory "${{ github.workspace }}/TestResults"
+          --collect:"XPlat Code Coverage"
+          --verbosity normal
+
+      # --------------------------------------------------------
+      # Upload test results
+      # --------------------------------------------------------
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_number }}
+          path: "${{ github.workspace }}/TestResults/**/*.trx"
+          if-no-files-found: warn
+          retention-days: 14
+
+      # --------------------------------------------------------
+      # Upload coverage
+      # --------------------------------------------------------
+
+      - name: Upload code coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_number }}
+          path: "${{ github.workspace }}/TestResults/**/coverage.*"
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # --------------------------------------------------------
+      # Publish ASP.NET Core application
+      # --------------------------------------------------------
+
+      - name: Publish production application
+        run: >
+          dotnet publish "${{ env.API_PROJECT }}"
+          --configuration Release
+          --no-restore
+          --output "${{ env.PUBLISH_DIRECTORY }}"
+          --runtime "${{ env.DOTNET_RUNTIME }}"
+          --self-contained false
+          --nologo
+
+      # --------------------------------------------------------
+      # Validate publish output
+      # --------------------------------------------------------
+
+      - name: Validate publish output
+        shell: pwsh
+        run: |
+          $publish = "${{ env.PUBLISH_DIRECTORY }}"
+
+          if (-not (Test-Path $publish)) {
+            throw "Publish directory was not created."
+          }
+
+          $apiDll = Join-Path $publish "SmartTaskOptimizer.API.dll"
+          $webConfig = Join-Path $publish "web.config"
+
+          if (-not (Test-Path $apiDll)) {
+            throw "SmartTaskOptimizer.API.dll was not found in publish output."
+          }
+
+          if (-not (Test-Path $webConfig)) {
+            throw "web.config was not found in publish output."
+          }
+
+          $secretFiles = Get-ChildItem `
+            -Path $publish `
+            -Recurse `
+            -Force `
+            -Include "*.pfx", "*.pem", "*.key", ".env" `
+            -ErrorAction SilentlyContinue
+
+          if ($secretFiles) {
+            Write-Host "Potential sensitive files detected:"
+
+            $secretFiles | ForEach-Object {
+              Write-Host $_.FullName
+            }
+
+            throw "Sensitive certificate/key/environment files were found in publish output."
+          }
+
+          Write-Host "Publish output validation successful."
+
+      # --------------------------------------------------------
+      # Create deployment ZIP
+      # --------------------------------------------------------
+
+      - name: Create deployment artifact
+        shell: pwsh
+        run: |
+          $artifactPath = "${{ github.workspace }}/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
+
+          Compress-Archive `
+            -Path "${{ env.PUBLISH_DIRECTORY }}/*" `
+            -DestinationPath $artifactPath `
+            -Force
+
+          if (-not (Test-Path $artifactPath)) {
+            throw "Deployment artifact was not created."
+          }
+
+          Write-Host "Deployment artifact created:"
+          Write-Host $artifactPath
+
+      # --------------------------------------------------------
+      # Upload deployment artifact
+      # --------------------------------------------------------
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
+          path: "${{ github.workspace }}/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
+          if-no-files-found: error
+          retention-days: 30
+
+
+  # ============================================================
+  # PRODUCTION DEPLOYMENT
+  # ============================================================
+
+  deploy-production:
+    name: Deploy to MonsterASP.NET
+    needs: build-test
+
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'push' &&
+        (
+          github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/master'
+        )
+      )
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    environment:
+      name: production
+
+    steps:
+
+      # --------------------------------------------------------
+      # Download deployment artifact
+      # --------------------------------------------------------
+
+      - name: Download deployment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
+          path: ./deployment
+
+      # --------------------------------------------------------
+      # Extract deployment package
+      # --------------------------------------------------------
+
+      - name: Extract deployment package
+        shell: bash
+        run: |
+          mkdir -p ./publish
+
+          ZIP_FILE="./deployment/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::Deployment ZIP was not found: $ZIP_FILE"
+            exit 1
+          fi
+
+          unzip -q "$ZIP_FILE" -d ./publish
+
+          if [ ! -f "./publish/SmartTaskOptimizer.API.dll" ]; then
+            echo "::error::SmartTaskOptimizer.API.dll was not found."
+            exit 1
+          fi
+
+          if [ ! -f "./publish/web.config" ]; then
+            echo "::error::web.config was not found."
+            exit 1
+          fi
+
+          echo "Deployment package extracted successfully."
+
+      # --------------------------------------------------------
+      # Deploy to MonsterASP.NET using FTP
+      # --------------------------------------------------------
+
+      - name: Deploy to MonsterASP.NET via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.MONSTERASP_FTP_HOST }}
+          username: ${{ secrets.MONSTERASP_FTP_USERNAME }}
+          password: ${{ secrets.MONSTERASP_FTP_PASSWORD }}
+          server-dir: ${{ secrets.MONSTERASP_FTP_PATH }}
+          local-dir: ./publish/
+          protocol: ftp
+          port: 21
+          log-level: standard
+          timeout: 120000
+
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/TestResults/**
+            **/*.pdb
+            **/*.zip
+
+      # --------------------------------------------------------
+      # Wait for application startup
+      # --------------------------------------------------------
+
+      - name: Wait for application startup
+        shell: bash
+        run: |
+          echo "Waiting for MonsterASP.NET application startup..."
+          sleep 15
+
+      # --------------------------------------------------------
+      # Production health check
+      # --------------------------------------------------------
+
+      - name: Verify production health
+        shell: bash
+        env:
+          MONSTERASP_HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
+        run: |
+          if [ -z "$MONSTERASP_HEALTHCHECK_URL" ]; then
+            echo "::error::MONSTERASP_HEALTHCHECK_URL is not configured."
+            exit 1
+          fi
+
+          echo "Checking production health endpoint..."
+
+          for attempt in {1..6}; do
+
+            status_code=$(curl \
+              --silent \
+              --show-error \
+              --output /tmp/health-response.txt \
+              --write-out "%{http_code}" \
+              --max-time 20 \
+              "$MONSTERASP_HEALTHCHECK_URL" || true)
+
+            echo "Health check attempt $attempt returned HTTP $status_code"
+
+            if [ "$status_code" = "200" ]; then
+              echo "Production health check passed."
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 6 ]; then
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+            fi
+
+          done
+
+          echo "::error::Production health check failed."
+
+          echo "Health check response:"
+          cat /tmp/health-response.txt 2>/dev/null || true
+
+          exit 1
+
+      # --------------------------------------------------------
+      # Deployment summary
+      # --------------------------------------------------------
+
+      - name: Deployment summary
+        if: success()
+        shell: bash
+        env:
+          MONSTERASP_HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
+        run: |
+          echo "============================================"
+          echo "SmartTaskOptimizer deployment successful"
+          echo "============================================"
+          echo "Commit: $GITHUB_SHA"
+          echo "Branch: $GITHUB_REF_NAME"
+          echo "Environment: production"
+          echo "Health check: $MONSTERASP_HEALTHCHECK_URL"
+          echo "============================================"
       - main
       - "feature/**"
       - "bugfix/**"
