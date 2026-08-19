@@ -18,7 +18,8 @@ public sealed class AppDbContext : DbContext
     public DbSet<TaskTag> TaskTags => Set<TaskTag>();
     public DbSet<Activity> Activities => Set<Activity>();
     public DbSet<Notification> Notifications => Set<Notification>();
-
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    
     public override int SaveChanges()
     {
         ApplyAuditTimestamps();
