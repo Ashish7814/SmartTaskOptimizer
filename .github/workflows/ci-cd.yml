@@ -1,523 +1,72 @@
 name: SmartTaskOptimizer CI/CD
 
-"on":
+on:
   push:
     branches:
-      - main
+      - master
 
   pull_request:
     branches:
-      - main
+      - master
 
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: smarttask-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
-  DOTNET_VERSION: "8.0.x"
-  DOTNET_RUNTIME: "win-x86"
-
-  SOLUTION_FILE: "SmartTaskOptimizer.sln"
-
-  API_PROJECT: "SmartTaskOptimizer.API/SmartTaskOptimizer.API.csproj"
-
-  INFRASTRUCTURE_PROJECT: "SmartTaskOptimizer.Infrastructure/SmartTaskOptimizer.Infrastructure.csproj"
-
-  PUBLISH_DIRECTORY: "${{ github.workspace }}/publish"
-
-  ARTIFACT_NAME: "SmartTaskOptimizer-api"
+  DOTNET_VERSION: '8.0.x'
+  SOLUTION: 'SmartTaskOptimizer.sln'
+  API_PROJECT: 'SmartTaskOptimizer.API/SmartTaskOptimizer.API.csproj'
+  INFRA_PROJECT: 'SmartTaskOptimizer.Infrastructure/SmartTaskOptimizer.Infrastructure.csproj'
 
 jobs:
-
-  # ============================================================
-  # BUILD, TEST AND PUBLISH
-  # ============================================================
-
   build-test:
-    name: Build, Test and Publish
+    name: Build and Test
     runs-on: windows-latest
-    timeout-minutes: 30
 
     steps:
-
-      # --------------------------------------------------------
-      # CHECKOUT
-      # --------------------------------------------------------
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      # --------------------------------------------------------
-      # SETUP .NET 8
-      # --------------------------------------------------------
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # --------------------------------------------------------
-      # FORCE .NET 8 SDK
-      # --------------------------------------------------------
+      - name: Restore
+        run: dotnet restore "${{ env.SOLUTION }}"
 
-      - name: Configure .NET 8 SDK
-        shell: pwsh
-        run: |
-          $sdkOutput = dotnet --list-sdks |
-            Select-String '^8\.0\.' |
-            Select-Object -Last 1
+      - name: Build
+        run: dotnet build "${{ env.SOLUTION }}" --configuration Release --no-restore
 
-          if (-not $sdkOutput) {
-            throw "No .NET 8 SDK was found."
-          }
+      - name: Test
+        run: dotnet test "${{ env.SOLUTION }}" --configuration Release --no-build
 
-          $sdkVersion = ($sdkOutput.ToString().Trim() -split '\s+')[0]
+      - name: Publish
+        run: dotnet publish "${{ env.API_PROJECT }}" --configuration Release --output ./publish --runtime win-x86 --self-contained false
 
-          Write-Host "Selected .NET 8 SDK: $sdkVersion"
-
-          $globalJson = @{
-            sdk = @{
-              version = $sdkVersion
-              rollForward = "latestPatch"
-              allowPrerelease = $false
-            }
-          } | ConvertTo-Json -Depth 3
-
-          $globalJson | Set-Content `
-            -Path "global.json" `
-            -Encoding UTF8
-
-          Write-Host "Created global.json:"
-          Get-Content "global.json"
-
-      # --------------------------------------------------------
-      # VERIFY .NET
-      # --------------------------------------------------------
-
-      - name: Verify .NET SDK
-        shell: pwsh
-        run: |
-          $version = dotnet --version
-
-          Write-Host "Active .NET SDK: $version"
-
-          if (-not $version.StartsWith("8.")) {
-            throw "Expected .NET 8 SDK but found $version"
-          }
-
-      - name: Display .NET information
-        shell: pwsh
-        run: |
-          dotnet --info
-
-      # --------------------------------------------------------
-      # VALIDATE PROJECT STRUCTURE
-      # --------------------------------------------------------
-
-      - name: Validate project structure
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "${{ env.SOLUTION_FILE }}")) {
-            throw "Solution file not found: ${{ env.SOLUTION_FILE }}"
-          }
-
-          if (-not (Test-Path "${{ env.API_PROJECT }}")) {
-            throw "API project not found: ${{ env.API_PROJECT }}"
-          }
-
-          if (-not (Test-Path "${{ env.INFRASTRUCTURE_PROJECT }}")) {
-            throw "Infrastructure project not found: ${{ env.INFRASTRUCTURE_PROJECT }}"
-          }
-
-          Write-Host "Solution found."
-          Write-Host "API project found."
-          Write-Host "Infrastructure project found."
-
-      # --------------------------------------------------------
-      # NUGET CACHE
-      # --------------------------------------------------------
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.config', '**/nuget.config') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      # --------------------------------------------------------
-      # RESTORE
-      #
-      # Runtime is required for the win-x86 publish assets.
-      # --------------------------------------------------------
-
-      - name: Restore solution
-        run: >
-          dotnet restore "${{ env.SOLUTION_FILE }}"
-          --runtime "${{ env.DOTNET_RUNTIME }}"
-          --force
-
-      # --------------------------------------------------------
-      # BUILD
-      #
-      # Do NOT specify --runtime here.
-      # Solution-level build + RID causes NETSDK1134.
-      # --------------------------------------------------------
-
-      - name: Build Release
-        run: >
-          dotnet build "${{ env.SOLUTION_FILE }}"
-          --configuration Release
-          --no-restore
-          --nologo
-
-      # --------------------------------------------------------
-      # TEST
-      # --------------------------------------------------------
-
-      - name: Run automated tests
-        run: >
-          dotnet test "${{ env.SOLUTION_FILE }}"
-          --configuration Release
-          --no-build
-          --no-restore
-          --logger "trx;LogFileName=test-results.trx"
-          --results-directory "${{ github.workspace }}/TestResults"
-          --collect:"XPlat Code Coverage"
-          --verbosity normal
-
-      # --------------------------------------------------------
-      # TEST RESULTS
-      # --------------------------------------------------------
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ github.run_number }}
-          path: "${{ github.workspace }}/TestResults/**/*.trx"
-          if-no-files-found: warn
-          retention-days: 14
-
-      # --------------------------------------------------------
-      # CODE COVERAGE
-      # --------------------------------------------------------
-
-      - name: Upload code coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ github.run_number }}
-          path: "${{ github.workspace }}/TestResults/**/coverage.*"
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # --------------------------------------------------------
-      # PUBLISH API
-      # --------------------------------------------------------
-
-      - name: Publish production application
-        run: >
-          dotnet publish "${{ env.API_PROJECT }}"
-          --configuration Release
-          --no-restore
-          --output "${{ env.PUBLISH_DIRECTORY }}"
-          --runtime "${{ env.DOTNET_RUNTIME }}"
-          --self-contained false
-          --nologo
-
-      # --------------------------------------------------------
-      # VALIDATE PUBLISH OUTPUT
-      # --------------------------------------------------------
-
-      - name: Validate publish output
-        shell: pwsh
-        run: |
-          $publish = "${{ env.PUBLISH_DIRECTORY }}"
-
-          if (-not (Test-Path $publish)) {
-            throw "Publish directory was not created."
-          }
-
-          if (-not (Test-Path "$publish/SmartTaskOptimizer.API.dll")) {
-            throw "SmartTaskOptimizer.API.dll was not found."
-          }
-
-          if (-not (Test-Path "$publish/web.config")) {
-            throw "web.config was not found."
-          }
-
-          $secretFiles = Get-ChildItem `
-            -Path $publish `
-            -Recurse `
-            -Force `
-            -Include "*.pfx", "*.pem", "*.key", ".env" `
-            -ErrorAction SilentlyContinue
-
-          if ($secretFiles) {
-            throw "Sensitive certificate/key/environment files were found in publish output."
-          }
-
-          Write-Host "Publish output validation successful."
-
-      # --------------------------------------------------------
-      # CREATE DEPLOYMENT ZIP
-      # --------------------------------------------------------
-
-      - name: Create deployment artifact
-        shell: pwsh
-        run: |
-          $artifactPath = "${{ github.workspace }}/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
-
-          Compress-Archive `
-            -Path "${{ env.PUBLISH_DIRECTORY }}/*" `
-            -DestinationPath $artifactPath `
-            -Force
-
-          if (-not (Test-Path $artifactPath)) {
-            throw "Deployment artifact was not created."
-          }
-
-          Write-Host "Deployment artifact created successfully."
-
-      # --------------------------------------------------------
-      # UPLOAD DEPLOYMENT ARTIFACT
-      # --------------------------------------------------------
-
-      - name: Upload deployment artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: api
           path: ./publish
 
-
-  # ============================================================
-  # DEPLOY PRODUCTION
-  # ============================================================
-
-  deploy-production:
-    name: Deploy to MonsterASP.NET
+  deploy:
+    name: Deploy to MonsterASP
     needs: build-test
-
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'push' &&
-        (
-          github.ref == 'refs/heads/main' ||
-          github.ref == 'refs/heads/master'
-        )
-      )
+    if: github.ref == 'refs/heads/master'
 
     runs-on: windows-latest
-    timeout-minutes: 30
-
-    environment:
-      name: production
 
     steps:
-
-      # --------------------------------------------------------
-      # CHECKOUT SOURCE
-      #
-      # Required because EF Core migrations are in the
-      # Infrastructure project.
-      # --------------------------------------------------------
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # --------------------------------------------------------
-      # SETUP .NET 8
-      # --------------------------------------------------------
-
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      # --------------------------------------------------------
-      # CONFIGURE .NET 8
-      # --------------------------------------------------------
-
-      - name: Configure .NET 8 SDK
-        shell: pwsh
-        run: |
-          $sdkOutput = dotnet --list-sdks |
-            Select-String '^8\.0\.' |
-            Select-Object -Last 1
-
-          if (-not $sdkOutput) {
-            throw "No .NET 8 SDK was found."
-          }
-
-          $sdkVersion = ($sdkOutput.ToString().Trim() -split '\s+')[0]
-
-          Write-Host "Selected .NET 8 SDK: $sdkVersion"
-
-          $globalJson = @{
-            sdk = @{
-              version = $sdkVersion
-              rollForward = "latestPatch"
-              allowPrerelease = $false
-            }
-          } | ConvertTo-Json -Depth 3
-
-          $globalJson | Set-Content `
-            -Path "global.json" `
-            -Encoding UTF8
-
-      # --------------------------------------------------------
-      # VERIFY .NET
-      # --------------------------------------------------------
-
-      - name: Verify .NET SDK
-        shell: pwsh
-        run: |
-          $version = dotnet --version
-
-          Write-Host "Active .NET SDK: $version"
-
-          if (-not $version.StartsWith("8.")) {
-            throw "Expected .NET 8 SDK but found $version"
-          }
-
-      # --------------------------------------------------------
-      # VALIDATE MIGRATION PROJECTS
-      # --------------------------------------------------------
-
-      - name: Validate EF Core project structure
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "${{ env.API_PROJECT }}")) {
-            throw "API project not found: ${{ env.API_PROJECT }}"
-          }
-
-          if (-not (Test-Path "${{ env.INFRASTRUCTURE_PROJECT }}")) {
-            throw "Infrastructure project not found: ${{ env.INFRASTRUCTURE_PROJECT }}"
-          }
-
-          Write-Host "API startup project found."
-          Write-Host "Infrastructure migration project found."
-
-      # --------------------------------------------------------
-      # NUGET CACHE
-      # --------------------------------------------------------
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-migrations-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.config', '**/nuget.config') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-migrations-
-            ${{ runner.os }}-nuget-
-
-      # --------------------------------------------------------
-      # RESTORE SOLUTION FOR EF
-      # --------------------------------------------------------
-
-      - name: Restore solution for EF Core
-        run: >
-          dotnet restore "${{ env.SOLUTION_FILE }}"
-          --runtime "${{ env.DOTNET_RUNTIME }}"
-          --force
-
-      # --------------------------------------------------------
-      # INSTALL EF CORE CLI
-      # --------------------------------------------------------
-
-      - name: Install EF Core CLI
-        shell: pwsh
-        run: |
-          dotnet tool install `
-            --global `
-            dotnet-ef `
-            --version 8.*
-
-          $toolPath = "$env:USERPROFILE\.dotnet\tools"
-
-          if (-not (Test-Path $toolPath)) {
-            throw "dotnet tools directory was not found."
-          }
-
-          $env:PATH = "$toolPath;$env:PATH"
-
-          dotnet ef --version
-
-      # --------------------------------------------------------
-      # VALIDATE PRODUCTION DATABASE SECRET
-      # --------------------------------------------------------
-
-      - name: Validate production database configuration
-        shell: pwsh
-        env:
-          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:MONSTERASP_CONNECTION_STRING)) {
-            throw "MONSTERASP_CONNECTION_STRING is not configured."
-          }
-
-          Write-Host "Production database connection string is configured."
-
-      # --------------------------------------------------------
-      # DOWNLOAD DEPLOYMENT ARTIFACT
-      # --------------------------------------------------------
-
-      - name: Download deployment artifact
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
-          path: ./deployment
+          name: api
+          path: ./publish
 
-      # --------------------------------------------------------
-      # EXTRACT DEPLOYMENT PACKAGE
-      # --------------------------------------------------------
-
-      - name: Extract deployment package
-        shell: pwsh
-        run: |
-          $zipFile = "${{ github.workspace }}/deployment/${{ env.ARTIFACT_NAME }}-${{ github.sha }}.zip"
-          $publish = "${{ github.workspace }}/publish"
-
-          if (-not (Test-Path $zipFile)) {
-            throw "Deployment ZIP was not found: $zipFile"
-          }
-
-          if (Test-Path $publish) {
-            Remove-Item $publish -Recurse -Force
-          }
-
-          New-Item `
-            -ItemType Directory `
-            -Path $publish `
-            -Force | Out-Null
-
-          Expand-Archive `
-            -Path $zipFile `
-            -DestinationPath $publish `
-            -Force
-
-          if (-not (Test-Path "$publish/SmartTaskOptimizer.API.dll")) {
-            throw "SmartTaskOptimizer.API.dll was not found."
-          }
-
-          if (-not (Test-Path "$publish/web.config")) {
-            throw "web.config was not found."
-          }
-
-          Write-Host "Deployment package extracted successfully."
-
-      # --------------------------------------------------------
-      # DEPLOY TO MONSTERASP.NET
-      # --------------------------------------------------------
-
-      - name: Deploy to MonsterASP.NET via WebDeploy
+      - name: Deploy
         uses: rasmusbuchholdt/simply-web-deploy@2.1.0
         with:
           website-name: ${{ secrets.WEBSITE_NAME }}
@@ -526,160 +75,14 @@ jobs:
           server-password: ${{ secrets.SERVER_PASSWORD }}
           source-path: '\publish\'
 
-      # --------------------------------------------------------
-      # VALIDATE EF MIGRATIONS
-      #
-      # --project = Infrastructure
-      # --startup-project = API
-      # --------------------------------------------------------
-
-      - name: Validate EF Core migrations
-        shell: pwsh
+      - name: Database Migration
         env:
-          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
+          CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
         run: |
-          $toolPath = "$env:USERPROFILE\.dotnet\tools"
-          $env:PATH = "$toolPath;$env:PATH"
-
-          Write-Host "Checking EF Core migrations..."
-
-          dotnet ef migrations list `
-            --project "${{ env.INFRASTRUCTURE_PROJECT }}" `
-            --startup-project "${{ env.API_PROJECT }}" `
-            --configuration Release `
-            --connection "$env:MONSTERASP_CONNECTION_STRING"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "EF Core migration validation failed."
-          }
-
-          Write-Host "EF Core migration validation successful."
-
-      # --------------------------------------------------------
-      # APPLY DATABASE MIGRATIONS
-      # --------------------------------------------------------
-
-      - name: Apply EF Core database migrations
-        shell: pwsh
-        env:
-          MONSTERASP_CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
-        run: |
-          $toolPath = "$env:USERPROFILE\.dotnet\tools"
-          $env:PATH = "$toolPath;$env:PATH"
-
-          Write-Host "Applying EF Core database migrations..."
+          dotnet tool install --global dotnet-ef --version 8.*
 
           dotnet ef database update `
-            --project "${{ env.INFRASTRUCTURE_PROJECT }}" `
+            --project "${{ env.INFRA_PROJECT }}" `
             --startup-project "${{ env.API_PROJECT }}" `
             --configuration Release `
-            --connection "$env:MONSTERASP_CONNECTION_STRING"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Database migration failed."
-          }
-
-          Write-Host "Database migration completed successfully."
-
-      # --------------------------------------------------------
-      # WAIT FOR APPLICATION STARTUP
-      # --------------------------------------------------------
-
-      - name: Wait for application startup
-        shell: pwsh
-        run: |
-          Write-Host "Waiting for MonsterASP.NET application startup..."
-          Start-Sleep -Seconds 20
-
-      # --------------------------------------------------------
-      # PRODUCTION HEALTH CHECK
-      # --------------------------------------------------------
-
-      - name: Verify production health
-        shell: pwsh
-        env:
-          MONSTERASP_HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:MONSTERASP_HEALTHCHECK_URL)) {
-            throw "MONSTERASP_HEALTHCHECK_URL is not configured."
-          }
-
-          Write-Host "Checking production health endpoint..."
-
-          for ($attempt = 1; $attempt -le 6; $attempt++) {
-
-            Write-Host ""
-            Write-Host "Health check attempt $attempt..."
-
-            try {
-
-              $response = Invoke-WebRequest `
-                -Uri $env:MONSTERASP_HEALTHCHECK_URL `
-                -UseBasicParsing `
-                -TimeoutSec 30 `
-                -ErrorAction Stop
-
-              Write-Host "HTTP Status: $($response.StatusCode)"
-
-              if ($response.Content) {
-                Write-Host "Health response:"
-                Write-Host $response.Content
-              }
-
-              if ($response.StatusCode -eq 200) {
-                Write-Host "Production health check passed."
-                exit 0
-              }
-
-            }
-            catch {
-
-              Write-Host "Health check failed."
-              Write-Host "Error: $($_.Exception.Message)"
-
-              if ($_.Exception.Response) {
-                try {
-                  $reader = New-Object System.IO.StreamReader(
-                    $_.Exception.Response.GetResponseStream()
-                  )
-
-                  $body = $reader.ReadToEnd()
-
-                  if ($body) {
-                    Write-Host "Server response:"
-                    Write-Host $body
-                  }
-                }
-                catch {
-                  Write-Host "Unable to read error response."
-                }
-              }
-            }
-
-            if ($attempt -lt 6) {
-              Write-Host "Waiting 10 seconds..."
-              Start-Sleep -Seconds 10
-            }
-          }
-
-          throw "Production health check failed after 6 attempts."
-
-      # --------------------------------------------------------
-      # DEPLOYMENT SUMMARY
-      # --------------------------------------------------------
-
-      - name: Deployment summary
-        if: success()
-        shell: pwsh
-        env:
-          MONSTERASP_HEALTHCHECK_URL: ${{ secrets.MONSTERASP_HEALTHCHECK_URL }}
-        run: |
-          Write-Host "============================================"
-          Write-Host "SmartTaskOptimizer deployment successful"
-          Write-Host "============================================"
-          Write-Host "Commit: $env:GITHUB_SHA"
-          Write-Host "Branch: $env:GITHUB_REF_NAME"
-          Write-Host "Environment: production"
-          Write-Host "Database migrations: applied"
-          Write-Host "Health check: passed"
-          Write-Host "============================================"
+            --connection "$env:CONNECTION_STRING"
