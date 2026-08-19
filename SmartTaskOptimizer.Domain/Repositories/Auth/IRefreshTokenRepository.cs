@@ -6,20 +6,25 @@ public interface IRefreshTokenRepository
 {
     Task AddAsync(
         RefreshToken refreshToken,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 
     Task<RefreshToken?> GetByTokenHashAsync(
         string tokenHash,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
+
+    Task RotateAsync(
+        RefreshToken oldToken,
+        RefreshToken newToken,
+        CancellationToken cancellationToken = default);
 
     Task RevokeAsync(
         RefreshToken refreshToken,
-        string? ipAddress,
-        string? replacedByTokenHash,
-        CancellationToken cancellationToken);
+        string? ipAddress = null,
+        string? replacedByTokenHash = null,
+        CancellationToken cancellationToken = default);
 
     Task RevokeAllForUserAsync(
         Guid userId,
-        string? ipAddress,
-        CancellationToken cancellationToken);
+        string? ipAddress = null,
+        CancellationToken cancellationToken = default);
 }
