@@ -10,13 +10,13 @@
         //    Never store the raw refresh token in the 
         //    database
         //</summary>
-        public string TokenHas { get; set; }
-        public DateTime CreateAt { get; set; }
+        public string TokenHash { get; set; } = null!;
+        public DateTime CreatedAt { get; set; }
         public DateTime ExpiresAt { get; set; }
         public DateTime? RevokedAt { get; set; }
         public string? ReplacedBytokenHash { get; set; }
-        public string? CreateByIp { get; set; }
-        public string? REvokedByIp { get; set; }
+        public string? CreatedByIp { get; set; }
+        public string? RevokedByIp { get; set; }
         //<summary>
         //    Used for Optimistic concurrency during 
         //     refresh-token rotation
