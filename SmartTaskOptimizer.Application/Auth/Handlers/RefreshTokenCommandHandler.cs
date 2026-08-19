@@ -26,6 +26,12 @@ public sealed class RefreshTokenCommandHandler
         RefreshTokenCommand request,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.RefreshToken))
+        {
+            throw new UnauthorizedAccessException(
+                "Refresh token is required.");
+        }
+
         return await _refreshTokenService.RefreshAsync(
             request.RefreshToken,
             cancellationToken);
