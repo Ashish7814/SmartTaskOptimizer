@@ -16,11 +16,13 @@ permissions:
 
 env:
   DOTNET_VERSION: '8.0.x'
+  DOTNET_RUNTIME: 'win-x86'
   SOLUTION: 'SmartTaskOptimizer.sln'
   API_PROJECT: 'SmartTaskOptimizer.API/SmartTaskOptimizer.API.csproj'
   INFRA_PROJECT: 'SmartTaskOptimizer.Infrastructure/SmartTaskOptimizer.Infrastructure.csproj'
 
 jobs:
+
   build-test:
     name: Build and Test
     runs-on: windows-latest
@@ -35,22 +37,23 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore "${{ env.SOLUTION }}"
+        run: dotnet restore "${{ env.SOLUTION }}" --runtime "${{ env.DOTNET_RUNTIME }}"
 
       - name: Build
         run: dotnet build "${{ env.SOLUTION }}" --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test "${{ env.SOLUTION }}" --configuration Release --no-build
+        run: dotnet test "${{ env.SOLUTION }}" --configuration Release --no-build --no-restore
 
-      - name: Publish
-        run: dotnet publish "${{ env.API_PROJECT }}" --configuration Release --output ./publish --runtime win-x86 --self-contained false
+      - name: Publish API
+        run: dotnet publish "${{ env.API_PROJECT }}" --configuration Release --output ./publish --runtime "${{ env.DOTNET_RUNTIME }}" --self-contained false
 
-      - name: Upload artifact
+      - name: Upload API
         uses: actions/upload-artifact@v4
         with:
           name: api
           path: ./publish
+
 
   deploy:
     name: Deploy to MonsterASP
@@ -59,14 +62,25 @@ jobs:
 
     runs-on: windows-latest
 
+    environment:
+      name: production
+
     steps:
-      - name: Download artifact
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Download API
         uses: actions/download-artifact@v4
         with:
           name: api
           path: ./publish
 
-      - name: Deploy
+      - name: Deploy to MonsterASP
         uses: rasmusbuchholdt/simply-web-deploy@2.1.0
         with:
           website-name: ${{ secrets.WEBSITE_NAME }}
@@ -75,11 +89,22 @@ jobs:
           server-password: ${{ secrets.SERVER_PASSWORD }}
           source-path: '\publish\'
 
+      - name: Install EF Core
+        shell: pwsh
+        run: |
+          dotnet tool install --global dotnet-ef --version 8.*
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          dotnet ef --version
+
+      - name: Restore for EF
+        run: dotnet restore "${{ env.SOLUTION }}" --runtime "${{ env.DOTNET_RUNTIME }}"
+
       - name: Database Migration
         env:
           CONNECTION_STRING: ${{ secrets.MONSTERASP_CONNECTION_STRING }}
+        shell: pwsh
         run: |
-          dotnet tool install --global dotnet-ef --version 8.*
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
 
           dotnet ef database update `
             --project "${{ env.INFRA_PROJECT }}" `
