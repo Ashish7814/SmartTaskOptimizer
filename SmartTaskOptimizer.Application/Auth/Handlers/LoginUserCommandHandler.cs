@@ -2,47 +2,106 @@ using MediatR;
 using Microsoft.AspNetCore.Identity;
 using SmartTaskOptimizer.Application.Auth.Commands;
 using SmartTaskOptimizer.Application.Auth.Service;
-using SmartTaskOptimizer.Application.Common.Exceptions;
+using SmartTaskOptimizer.Domain.Entities;
 using SmartTaskOptimizer.Domain.Repositories.Auth;
-using SmartTaskOptimizer.Shared.DTOs.Auth;
 
 namespace SmartTaskOptimizer.Application.Auth.Handlers;
 
-public sealed class LoginUserCommandHandler : IRequestHandler<LoginUserCommand, AuthResponseDto>
+public sealed class LoginUserCommandHandler
+    : IRequestHandler<LoginUserCommand, AuthTokenResult>
 {
-    private readonly IUserRepository _repository;
+    private readonly IUserRepository _userRepository;
+    private readonly IRefreshTokenRepository _refreshTokenRepository;
     private readonly IJwtTokenService _jwtService;
-    private readonly PasswordHasher<Domain.Entities.User> _hasher = new();
+    private readonly RefreshTokenService _refreshTokenService;
 
-    public LoginUserCommandHandler(IUserRepository repository, IJwtTokenService jwtService)
+    private readonly PasswordHasher<User> _hasher = new();
+
+    public LoginUserCommandHandler(
+        IUserRepository userRepository,
+        IRefreshTokenRepository refreshTokenRepository,
+        IJwtTokenService jwtService,
+        RefreshTokenService refreshTokenService)
     {
-        _repository = repository;
+        _userRepository = userRepository;
+        _refreshTokenRepository = refreshTokenRepository;
         _jwtService = jwtService;
+        _refreshTokenService = refreshTokenService;
     }
 
-    public async Task<AuthResponseDto> Handle(LoginUserCommand request, CancellationToken cancellationToken)
+    public async Task<AuthTokenResult> Handle(
+        LoginUserCommand request,
+        CancellationToken cancellationToken)
     {
-        var email = request.Dto.Email.Trim().ToLowerInvariant();
-        var user = await _repository.GetByEmailAsync(email, cancellationToken);
+        var email =
+            request.Dto.Email
+                .Trim()
+                .ToLowerInvariant();
+
+        var user =
+            await _userRepository.GetByEmailAsync(
+                email,
+                cancellationToken);
+
         if (user is null || !user.IsActive)
-            throw new UnauthorizedAccessException("Invalid email or password.");
-
-        var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, request.Dto.Password);
-        if (result == PasswordVerificationResult.Failed)
-            throw new UnauthorizedAccessException("Invalid email or password.");
-
-        var lastLoginAt = DateTime.UtcNow;
-        await _repository.UpdateLastLoginAsync(user.Id, lastLoginAt, cancellationToken);
-        var token = _jwtService.GenerateToken(user);
-
-        return new AuthResponseDto
         {
-            Token = token,
+            throw new UnauthorizedAccessException(
+                "Invalid email or password.");
+        }
+
+        var passwordResult =
+            _hasher.VerifyHashedPassword(
+                user,
+                user.PasswordHash,
+                request.Dto.Password);
+
+        if (passwordResult == PasswordVerificationResult.Failed)
+        {
+            throw new UnauthorizedAccessException(
+                "Invalid email or password.");
+        }
+
+        var accessToken =
+            _jwtService.GenerateToken(
+                user,
+                out var expiresAtUtc);
+
+        var rawRefreshToken =
+            _refreshTokenService.GenerateToken();
+
+        var refreshTokenHash =
+            _refreshTokenService.HashToken(
+                rawRefreshToken);
+
+        var refreshToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            TokenHash = refreshTokenHash,
+            CreatedAt = DateTime.UtcNow,
+            ExpiresAt =
+                DateTime.UtcNow.AddDays(7),
+            CreatedByIp = request.IpAddress
+        };
+
+        await _refreshTokenRepository.AddAsync(
+            refreshToken,
+            cancellationToken);
+
+        await _userRepository.UpdateLastLoginAsync(
+            user.Id,
+            DateTime.UtcNow,
+            cancellationToken);
+
+        return new AuthTokenResult
+        {
+            AccessToken = accessToken,
+            RefreshToken = rawRefreshToken,
+            ExpiresAtUtc = expiresAtUtc,
             UserId = user.Id,
             FullName = user.FullName,
             Email = user.Email,
-            Role = user.Role.ToString(),
-            ExpiresAtUtc = DateTime.UtcNow.AddMinutes(60)
+            Role = user.Role.ToString()
         };
     }
 }

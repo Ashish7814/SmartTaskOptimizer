@@ -1,12 +1,10 @@
 using MediatR;
+using SmartTaskOptimizer.Application.Auth.Service;
 using SmartTaskOptimizer.Shared.DTOs.Auth;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace SmartTaskOptimizer.Application.Auth.Commands
-{
-    public record LoginUserCommand(LoginDto Dto) : IRequest<AuthResponseDto>;
-}
+namespace SmartTaskOptimizer.Application.Auth.Commands;
+
+public sealed record LoginUserCommand(
+    LoginDto Dto,
+    string? IpAddress)
+    : IRequest<AuthTokenResult>;
