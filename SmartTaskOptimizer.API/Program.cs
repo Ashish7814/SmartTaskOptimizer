@@ -258,6 +258,9 @@ using SmartTaskOptimizer.Infrastructure.Repositories.Projects;
 using SmartTaskOptimizer.Infrastructure.Repositories.Reports;
 using SmartTaskOptimizer.Infrastructure.Repositories.TaskHistory;
 using SmartTaskOptimizer.Infrastructure.Repositories.Tasks;
+using SmartTaskOptimizer.Domain.Repositories.Auth;
+using SmartTaskOptimizer.Infrastructure.Repositories.Auth;
+using SmartTaskOptimizer.Application.Auth.Service;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -406,7 +409,8 @@ if (string.IsNullOrWhiteSpace(jwtKey) ||
 }
 
 builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddAuthentication(
+        JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
         options.TokenValidationParameters =
@@ -417,17 +421,20 @@ builder.Services
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
 
-                ValidIssuer = builder.Configuration["Jwt:Issuer"],
-                ValidAudience = builder.Configuration["Jwt:Audience"],
+                ValidIssuer =
+                    builder.Configuration["Jwt:Issuer"],
+
+                ValidAudience =
+                    builder.Configuration["Jwt:Audience"],
 
                 IssuerSigningKey =
                     new SymmetricSecurityKey(
                         Encoding.UTF8.GetBytes(jwtKey)),
 
-                ClockSkew = TimeSpan.FromSeconds(30)
+                ClockSkew =
+                    TimeSpan.FromSeconds(30)
             };
 
-        // SignalR JWT support
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -435,7 +442,8 @@ builder.Services
                 var accessToken =
                     context.Request.Query["access_token"];
 
-                if (!string.IsNullOrWhiteSpace(accessToken) &&
+                if (!string.IsNullOrWhiteSpace(
+                        accessToken) &&
                     context.HttpContext.Request.Path
                         .StartsWithSegments("/hubs"))
                 {
@@ -598,6 +606,8 @@ builder.Services.AddScoped<IRealtimeNotifier, RealtimeNotifier>();
 builder.Services.AddScoped<ITaskBackgroundJob, TaskBackgroundJob>();
 
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
+builder.Services.AddSingleton<RefreshTokenService>();
 
 builder.Services.AddScoped<IExportService, ExportService>();
 
