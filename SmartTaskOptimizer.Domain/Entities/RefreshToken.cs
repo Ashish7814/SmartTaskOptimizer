@@ -22,8 +22,8 @@
         //     refresh-token rotation
         // </summary>
         public byte[] RowVersion { get; set;}
-        public bool IsExpired => 
-            DateTime UtcNow >= ExpiresAt;
+        public bool IsExpired =>
+            DateTime.UtcNow >= ExpiresAt;
 
         public bool IsRevoked =>
             RevokedAt.HasValue;
