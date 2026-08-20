@@ -17,12 +17,13 @@ public sealed class AuthController : ControllerBase
 
     private readonly IMediator _mediator;
     private readonly IConfiguration _configuration;
+    private readonly CsrfTokenService _csrfTokenService;
 
-    public AuthController(ISender sender, IMediator mediator, IConfiguration configuration)
+    public AuthController(IMediator mediator, IConfiguration configuration, CsrfTokenService csrfTokenService)
     {
-        _sender = sender;
         _mediator = mediator;
         _configuration = configuration;
+        _csrfTokenService = csrfTokenService;
     }
 
     [AllowAnonymous]
