@@ -2,6 +2,7 @@ using MediatR;
 
 using SmartTaskOptimizer.Application.Auth.Commands;
 using SmartTaskOptimizer.Application.Auth.Service;
+using Microsoft.Extensions.Configuration;
 
 using SmartTaskOptimizer.Domain.Repositories.Auth;
 
