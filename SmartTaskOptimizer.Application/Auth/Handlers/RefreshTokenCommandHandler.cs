@@ -2,7 +2,6 @@ using MediatR;
 
 using SmartTaskOptimizer.Application.Auth.Commands;
 using SmartTaskOptimizer.Application.Auth.Service;
-using Microsoft.Extensions.Configuration;
 
 using SmartTaskOptimizer.Domain.Repositories.Auth;
 
@@ -22,14 +21,10 @@ public sealed class RefreshTokenCommandHandler
     private readonly RefreshTokenService
         _refreshTokenService;
 
-    private readonly IConfiguration
-        _configuration;
-
     public RefreshTokenCommandHandler(
         IRefreshTokenRepository refreshTokenRepository,
         IJwtTokenService jwtService,
-        RefreshTokenService refreshTokenService,
-        IConfiguration configuration)
+        RefreshTokenService refreshTokenService)
     {
         _refreshTokenRepository =
             refreshTokenRepository;
@@ -39,9 +34,6 @@ public sealed class RefreshTokenCommandHandler
 
         _refreshTokenService =
             refreshTokenService;
-
-        _configuration =
-            configuration;
     }
 
     public async Task<AuthTokenResult> Handle(
@@ -75,12 +67,10 @@ public sealed class RefreshTokenCommandHandler
         }
 
         /*
-         * A revoked token is being reused.
+         * Detect refresh-token reuse.
          *
-         * This can indicate that the refresh token
-         * was stolen.
-         *
-         * Revoke all sessions for this user.
+         * If a revoked token is presented again,
+         * revoke all sessions for this user.
          */
         if (storedToken.IsRevoked)
         {
@@ -111,7 +101,8 @@ public sealed class RefreshTokenCommandHandler
         }
 
         /*
-         * Get user associated with refresh token.
+         * Get the user associated with
+         * the refresh token.
          */
         var user =
             storedToken.User;
@@ -154,17 +145,15 @@ public sealed class RefreshTokenCommandHandler
                 newRawRefreshToken);
 
         /*
-         * Read refresh-token lifetime from
-         * configuration.
+         * Refresh tokens currently have a
+         * 7-day lifetime.
          *
-         * Example:
-         *
-         * "RefreshTokenDays": 7
+         * This replaces the IConfiguration/
+         * GetValue dependency so the Application
+         * project remains independent of the
+         * ASP.NET configuration binder.
          */
-        var refreshTokenDays =
-            _configuration.GetValue(
-                "Jwt:RefreshTokenDays",
-                7);
+        const int refreshTokenDays = 7;
 
         /*
          * Create replacement refresh token.
@@ -193,7 +182,7 @@ public sealed class RefreshTokenCommandHandler
             };
 
         /*
-         * Revoke old refresh token.
+         * Revoke the old refresh token.
          */
         storedToken.RevokedAt =
             DateTime.UtcNow;
@@ -208,13 +197,15 @@ public sealed class RefreshTokenCommandHandler
             newRefreshTokenHash;
 
         /*
-         * Rotate both records atomically.
+         * Atomically rotate:
          *
-         * Old token:
-         *     revoked
+         * OLD TOKEN
+         *     ↓
+         * REVOKED
          *
-         * New token:
-         *     active
+         * NEW TOKEN
+         *     ↓
+         * ACTIVE
          */
         await _refreshTokenRepository
             .RotateAsync(
@@ -224,10 +215,10 @@ public sealed class RefreshTokenCommandHandler
 
         /*
          * Return the new access token and
-         * new refresh token to AuthController.
+         * raw refresh token.
          *
-         * AuthController sends the refresh token
-         * only as an HttpOnly cookie.
+         * AuthController will put the raw
+         * refresh token into the HttpOnly cookie.
          */
         return new AuthTokenResult
         {
