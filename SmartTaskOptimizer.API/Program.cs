@@ -273,8 +273,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Configuration
 // ============================================================
 
-var connectionString =
-    builder.Configuration.GetConnectionString("DefaultConnection");
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
 if (string.IsNullOrWhiteSpace(connectionString))
 {
@@ -294,6 +293,11 @@ builder.Services.AddProblemDetails();
 
 builder.Services.AddHttpContextAccessor();
 
+// ============================================================
+// CSRF
+// ============================================================
+
+builder.Services.AddSingleton<CsrfTokenService>();
 // ============================================================
 // Response Compression
 // ============================================================
@@ -424,15 +428,11 @@ builder.Services
                 ValidIssuer =
                     builder.Configuration["Jwt:Issuer"],
 
-                ValidAudience =
-                    builder.Configuration["Jwt:Audience"],
+                ValidAudience = builder.Configuration["Jwt:Audience"],
 
-                IssuerSigningKey =
-                    new SymmetricSecurityKey(
-                        Encoding.UTF8.GetBytes(jwtKey)),
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
 
-                ClockSkew =
-                    TimeSpan.FromSeconds(30)
+                ClockSkew = TimeSpan.FromSeconds(30)
             };
 
         options.Events = new JwtBearerEvents
