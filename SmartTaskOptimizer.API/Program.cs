@@ -38,6 +38,7 @@ using SmartTaskOptimizer.Infrastructure.Repositories.Projects;
 using SmartTaskOptimizer.Infrastructure.Repositories.Reports;
 using SmartTaskOptimizer.Infrastructure.Repositories.TaskHistory;
 using SmartTaskOptimizer.Infrastructure.Repositories.Tasks;
+using SmartTaskOptimizer.Infrastructure.Security;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
