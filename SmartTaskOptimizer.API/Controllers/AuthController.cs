@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using SmartTaskOptimizer.Application.Auth.Commands;
 using SmartTaskOptimizer.Application.Auth.Service;
 using SmartTaskOptimizer.Shared.DTOs.Auth;
+using SmartTaskOptimizer.Infrastructure.Security;
 
 namespace SmartTaskOptimizer.API.Controllers;
 
@@ -12,16 +13,14 @@ namespace SmartTaskOptimizer.API.Controllers;
 [ApiController]
 public sealed class AuthController : ControllerBase
 {
-    private const string RefreshCookieName =
-        "smarttask.refresh";
+    private const string RefreshCookieName = "smarttask.refresh";
 
     private readonly IMediator _mediator;
     private readonly IConfiguration _configuration;
 
-    public AuthController(
-        IMediator mediator,
-        IConfiguration configuration)
+    public AuthController(ISender sender, IMediator mediator, IConfiguration configuration)
     {
+        _sender = sender;
         _mediator = mediator;
         _configuration = configuration;
     }
@@ -45,21 +44,20 @@ public sealed class AuthController : ControllerBase
     [EnableRateLimiting("auth")]
     [HttpPost("login")]
     public async Task<ActionResult<AuthResponseDto>> Login(
-        [FromBody] LoginDto dto,
-        CancellationToken cancellationToken)
+        [FromBody] LoginDto dto, CancellationToken cancellationToken)
     {
         var ipAddress =
             HttpContext.Connection.RemoteIpAddress?
                 .ToString();
 
         var result =
-            await _mediator.Send(
-                new LoginUserCommand(
+            await _mediator.Send(new LoginUserCommand(
                     dto,
                     ipAddress),
                 cancellationToken);
 
         SetRefreshCookie(result.RefreshToken);
+        SetCsrfCookie();
 
         return Ok(ToResponse(result));
     }
@@ -70,8 +68,15 @@ public sealed class AuthController : ControllerBase
     public async Task<ActionResult<AuthResponseDto>> Refresh(
         CancellationToken cancellationToken)
     {
-        var refreshToken =
-            Request.Cookies[RefreshCookieName];
+        var csrfCookie = Request.Cookies[CsrfTokenService.CookieName];
+
+        var csrfHeader = Request.Headers[CsrfTokenService.HeaderName].FirstOrDefault();
+
+        if (!_csrfTokenService.Validate(csrfCookie, csrfHeader))
+        {
+            return Forbid();
+        }
+        var refreshToken = Request.Cookies[RefreshCookieName];
 
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
@@ -85,14 +90,13 @@ public sealed class AuthController : ControllerBase
             HttpContext.Connection.RemoteIpAddress?
                 .ToString();
 
-        var result =
-            await _mediator.Send(
-                new RefreshTokenCommand(
+        var result = await _mediator.Send(new RefreshTokenCommand(
                     refreshToken,
                     ipAddress),
                 cancellationToken);
 
         SetRefreshCookie(result.RefreshToken);
+        SetCsrfCookie();
 
         return Ok(ToResponse(result));
     }
@@ -102,24 +106,29 @@ public sealed class AuthController : ControllerBase
     public async Task<IActionResult> Logout(
         CancellationToken cancellationToken)
     {
-        var refreshToken =
-            Request.Cookies[RefreshCookieName];
+         var csrfCookie = Request.Cookies[CsrfTokenService.CookieName];
+
+        var csrfHeader = Request.Headers[CsrfTokenService.HeaderName].FirstOrDefault();
+
+        if (!_csrfTokenService.Validate(csrfCookie, csrfHeader))
+        {
+            return Forbid();
+        }
+        var refreshToken = Request.Cookies[RefreshCookieName];
 
         if (!string.IsNullOrWhiteSpace(refreshToken))
         {
-            var ipAddress =
-                HttpContext.Connection
-                    .RemoteIpAddress?
+            var ipAddress = HttpContext.Connection.RemoteIpAddress?
                     .ToString();
 
-            await _mediator.Send(
-                new LogoutCommand(
+            await _mediator.Send(new LogoutCommand(
                     refreshToken,
                     ipAddress),
                 cancellationToken);
         }
 
         DeleteRefreshCookie();
+        DeleteCsrfCookie();
 
         return NoContent();
     }
@@ -146,8 +155,7 @@ public sealed class AuthController : ControllerBase
         });
     }
 
-    private AuthResponseDto ToResponse(
-        AuthTokenResult result)
+    private AuthResponseDto ToResponse(AuthTokenResult result)
     {
         return new AuthResponseDto
         {
@@ -160,13 +168,9 @@ public sealed class AuthController : ControllerBase
         };
     }
 
-    private void SetRefreshCookie(
-        string refreshToken)
+    private void SetRefreshCookie(string refreshToken)
     {
-        var days =
-            _configuration.GetValue(
-                "Jwt:RefreshTokenDays",
-                7);
+        var days = _configuration.GetValue("Jwt:RefreshTokenDays",7);
 
         Response.Cookies.Append(
             RefreshCookieName,
@@ -176,11 +180,10 @@ public sealed class AuthController : ControllerBase
                 HttpOnly = true,
                 Secure = true,
                 SameSite = GetSameSiteMode(),
-                Expires =
-                    DateTimeOffset.UtcNow.AddDays(days),
+                Expires = DateTimeOffset.UtcNow.AddDays(days),
 
-                MaxAge =
-                    TimeSpan.FromDays(days),
+                MaxAge = TimeSpan.FromDays(days),
+                IsEssential = true
 
                 Path = "/api/auth"
             });
@@ -195,7 +198,8 @@ public sealed class AuthController : ControllerBase
                 HttpOnly = true,
                 Secure = true,
                 SameSite = GetSameSiteMode(),
-                Path = "/api/auth"
+                Path = "/api/auth",
+                IsEssential = true
             });
     }
 
@@ -210,5 +214,51 @@ public sealed class AuthController : ControllerBase
             out var result)
             ? result
             : SameSiteMode.None;
+    }
+    private void SetCsrfCookie()
+    {
+        var csrfToken =
+            _csrfTokenService.GenerateToken();
+
+        Response.Cookies.Append(
+            CsrfTokenService.CookieName,
+            csrfToken,
+            new CookieOptions
+            {
+                // Angular must be able to read this token.
+                HttpOnly = false,
+
+                Secure = true,
+
+                SameSite = SameSiteMode.None,
+
+                Path = "/api/auth",
+
+                MaxAge = TimeSpan.FromDays(
+                    GetRefreshTokenDays()),
+
+                IsEssential = true
+            });
+    }
+
+    private void DeleteCsrfCookie()
+    {
+        Response.Cookies.Delete(
+            CsrfTokenService.CookieName,
+            new CookieOptions
+            {
+                HttpOnly = false,
+                Secure = true,
+                SameSite = SameSiteMode.None,
+                Path = "/api/auth",
+                IsEssential = true
+            });
+    }
+
+    private int GetRefreshTokenDays()
+    {
+        return _configuration.GetValue<int?>(
+                   "Auth:RefreshTokenDays")
+               ?? 7;
     }
 }
