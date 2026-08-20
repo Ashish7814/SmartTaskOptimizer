@@ -183,7 +183,7 @@ public sealed class AuthController : ControllerBase
                 Expires = DateTimeOffset.UtcNow.AddDays(days),
 
                 MaxAge = TimeSpan.FromDays(days),
-                IsEssential = true
+                IsEssential = true,
 
                 Path = "/api/auth"
             });
