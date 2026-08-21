@@ -53,8 +53,7 @@ public sealed class RefreshTokenCommandHandler : IRequestHandler<RefreshTokenCom
         if (storedToken.IsRevoked)
         {
             await _refreshTokenRepository.RevokeAllForUserAsync(storedToken.UserId, request.IpAddress, cancellationToken);
-            throw new UnauthorizedAccessException(
-                "Refresh token has been revoked.");
+            throw new UnauthorizedAccessException("Refresh token has been revoked.");
         }
         /*
          * Refresh token has expired.
@@ -99,8 +98,7 @@ public sealed class RefreshTokenCommandHandler : IRequestHandler<RefreshTokenCom
          * project remains independent of the
          * ASP.NET configuration binder.
          */
-       var refreshTokenDays = _config["Jwt:RefreshTokenDays"];
-
+       var refreshTokenDays = _config.GetValue<int>("Jwt:RefreshTokenDays", 7);
         /*
          * Create replacement refresh token.
          */
