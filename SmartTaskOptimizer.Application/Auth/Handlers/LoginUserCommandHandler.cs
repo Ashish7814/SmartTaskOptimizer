@@ -4,6 +4,7 @@ using SmartTaskOptimizer.Application.Auth.Commands;
 using SmartTaskOptimizer.Application.Auth.Service;
 using SmartTaskOptimizer.Domain.Entities;
 using SmartTaskOptimizer.Domain.Repositories.Auth;
+using Microsoft.Extensions.Configuration;
 
 namespace SmartTaskOptimizer.Application.Auth.Handlers;
 
@@ -14,6 +15,7 @@ public sealed class LoginUserCommandHandler
     private readonly IRefreshTokenRepository _refreshTokenRepository;
     private readonly IJwtTokenService _jwtService;
     private readonly RefreshTokenService _refreshTokenService;
+    private readonly IConfiguration _config;
 
     private readonly PasswordHasher<User> _hasher = new();
 
@@ -21,27 +23,24 @@ public sealed class LoginUserCommandHandler
         IUserRepository userRepository,
         IRefreshTokenRepository refreshTokenRepository,
         IJwtTokenService jwtService,
-        RefreshTokenService refreshTokenService)
+        RefreshTokenService refreshTokenService,
+        IConfiguration config)
     {
         _userRepository = userRepository;
         _refreshTokenRepository = refreshTokenRepository;
         _jwtService = jwtService;
         _refreshTokenService = refreshTokenService;
+        _config = config;
     }
 
     public async Task<AuthTokenResult> Handle(
         LoginUserCommand request,
         CancellationToken cancellationToken)
     {
-        var email =
-            request.Dto.Email
-                .Trim()
-                .ToLowerInvariant();
+        var refreshTokenDays = _config.GetValue<int>("Jwt:RefreshTokenDays", 7);
+        var email = request.Dto.Email.Trim().ToLowerInvariant();
 
-        var user =
-            await _userRepository.GetByEmailAsync(
-                email,
-                cancellationToken);
+        var user = await _userRepository.GetByEmailAsync(email, cancellationToken);
 
         if (user is null || !user.IsActive)
         {
@@ -49,11 +48,7 @@ public sealed class LoginUserCommandHandler
                 "Invalid email or password.");
         }
 
-        var passwordResult =
-            _hasher.VerifyHashedPassword(
-                user,
-                user.PasswordHash,
-                request.Dto.Password);
+        var passwordResult = _hasher.VerifyHashedPassword(user, user.PasswordHash, request.Dto.Password);
 
         if (passwordResult == PasswordVerificationResult.Failed)
         {
@@ -61,17 +56,11 @@ public sealed class LoginUserCommandHandler
                 "Invalid email or password.");
         }
 
-        var accessToken =
-            _jwtService.GenerateToken(
-                user,
-                out var expiresAtUtc);
+        var accessToken = _jwtService.GenerateToken(user, out var expiresAtUtc);
 
-        var rawRefreshToken =
-            _refreshTokenService.GenerateToken();
+        var rawRefreshToken = _refreshTokenService.GenerateToken();
 
-        var refreshTokenHash =
-            _refreshTokenService.HashToken(
-                rawRefreshToken);
+        var refreshTokenHash = _refreshTokenService.HashToken(rawRefreshToken);
 
         var refreshToken = new RefreshToken
         {
@@ -79,19 +68,13 @@ public sealed class LoginUserCommandHandler
             UserId = user.Id,
             TokenHash = refreshTokenHash,
             CreatedAt = DateTime.UtcNow,
-            ExpiresAt =
-                DateTime.UtcNow.AddDays(7),
+            ExpiresAt = DateTime.UtcNow.AddDays(refreshTokenDays),
             CreatedByIp = request.IpAddress
         };
 
-        await _refreshTokenRepository.AddAsync(
-            refreshToken,
-            cancellationToken);
+        await _refreshTokenRepository.AddAsync(refreshToken, cancellationToken);
 
-        await _userRepository.UpdateLastLoginAsync(
-            user.Id,
-            DateTime.UtcNow,
-            cancellationToken);
+        await _userRepository.UpdateLastLoginAsync(user.Id, DateTime.UtcNow, cancellationToken);
 
         return new AuthTokenResult
         {
