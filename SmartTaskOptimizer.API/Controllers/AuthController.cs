@@ -29,15 +29,9 @@ public sealed class AuthController : ControllerBase
     [AllowAnonymous]
     [EnableRateLimiting("auth")]
     [HttpPost("register")]
-    public async Task<ActionResult<Guid>> Register(
-        [FromBody] RegisterDto dto,
-        CancellationToken cancellationToken)
+    public async Task<ActionResult<Guid>> Register([FromBody] RegisterDto dto, CancellationToken cancellationToken)
     {
-        var result =
-            await _mediator.Send(
-                new RegisterUserCommand(dto),
-                cancellationToken);
-
+        var result = await _mediator.Send(new RegisterUserCommand(dto), cancellationToken);
         return Ok(result);
     }
 
@@ -47,38 +41,25 @@ public sealed class AuthController : ControllerBase
     public async Task<ActionResult<AuthResponseDto>> Login(
         [FromBody] LoginDto dto, CancellationToken cancellationToken)
     {
-        var ipAddress =
-            HttpContext.Connection.RemoteIpAddress?
-                .ToString();
-
-        var result =
-            await _mediator.Send(new LoginUserCommand(
-                    dto,
-                    ipAddress),
-                cancellationToken);
-
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var result = await _mediator.Send(new LoginUserCommand(dto, ipAddress), cancellationToken);
         SetRefreshCookie(result.RefreshToken);
         SetCsrfCookie();
-
         return Ok(ToResponse(result));
     }
 
     [AllowAnonymous]
     [EnableRateLimiting("auth")]
     [HttpPost("refresh")]
-    public async Task<ActionResult<AuthResponseDto>> Refresh(
-        CancellationToken cancellationToken)
+    public async Task<ActionResult<AuthResponseDto>> Refresh(CancellationToken cancellationToken)
     {
         var csrfCookie = Request.Cookies[CsrfTokenService.CookieName];
-
         var csrfHeader = Request.Headers[CsrfTokenService.HeaderName].FirstOrDefault();
-
         if (!_csrfTokenService.Validate(csrfCookie, csrfHeader))
         {
             return Forbid();
         }
         var refreshToken = Request.Cookies[RefreshCookieName];
-
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             return Unauthorized(new
@@ -86,51 +67,31 @@ public sealed class AuthController : ControllerBase
                 message = "Refresh token is missing."
             });
         }
-
-        var ipAddress =
-            HttpContext.Connection.RemoteIpAddress?
-                .ToString();
-
-        var result = await _mediator.Send(new RefreshTokenCommand(
-                    refreshToken,
-                    ipAddress),
-                cancellationToken);
-
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var result = await _mediator.Send(new RefreshTokenCommand(refreshToken, ipAddress), cancellationToken);
         SetRefreshCookie(result.RefreshToken);
         SetCsrfCookie();
-
         return Ok(ToResponse(result));
     }
 
    [AllowAnonymous]
     [HttpPost("logout")]
-    public async Task<IActionResult> Logout(
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> Logout(CancellationToken cancellationToken)
     {
          var csrfCookie = Request.Cookies[CsrfTokenService.CookieName];
-
         var csrfHeader = Request.Headers[CsrfTokenService.HeaderName].FirstOrDefault();
-
         if (!_csrfTokenService.Validate(csrfCookie, csrfHeader))
         {
             return Forbid();
         }
         var refreshToken = Request.Cookies[RefreshCookieName];
-
         if (!string.IsNullOrWhiteSpace(refreshToken))
         {
-            var ipAddress = HttpContext.Connection.RemoteIpAddress?
-                    .ToString();
-
-            await _mediator.Send(new LogoutCommand(
-                    refreshToken,
-                    ipAddress),
-                cancellationToken);
+            var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+            await _mediator.Send(new LogoutCommand(refreshToken, ipAddress), cancellationToken);
         }
-
         DeleteRefreshCookie();
         DeleteCsrfCookie();
-
         return NoContent();
     }
 
@@ -138,21 +99,12 @@ public sealed class AuthController : ControllerBase
     [HttpGet("me")]
     public ActionResult<object> Me()
     {
-        return Ok(new
+        return Ok(new 
         {
-            UserId = User.FindFirst(
-                System.Security.Claims.ClaimTypes.NameIdentifier)?
-                .Value,
-
+            UserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
             Name = User.Identity?.Name,
-
-            Email = User.FindFirst(
-                System.Security.Claims.ClaimTypes.Email)?
-                .Value,
-
-            Role = User.FindFirst(
-                System.Security.Claims.ClaimTypes.Role)?
-                .Value
+            Email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value,
+            Role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value
         });
     }
 
@@ -172,29 +124,21 @@ public sealed class AuthController : ControllerBase
     private void SetRefreshCookie(string refreshToken)
     {
         var days = _configuration.GetValue("Jwt:RefreshTokenDays",7);
-
-        Response.Cookies.Append(
-            RefreshCookieName,
-            refreshToken,
-            new CookieOptions
+        Response.Cookies.Append(RefreshCookieName, refreshToken, new CookieOptions
             {
                 HttpOnly = true,
                 Secure = true,
                 SameSite = GetSameSiteMode(),
                 Expires = DateTimeOffset.UtcNow.AddDays(days),
-
                 MaxAge = TimeSpan.FromDays(days),
                 IsEssential = true,
-
                 Path = "/api/auth"
             });
     }
 
     private void DeleteRefreshCookie()
     {
-        Response.Cookies.Delete(
-            RefreshCookieName,
-            new CookieOptions
+        Response.Cookies.Delete(RefreshCookieName, new CookieOptions
             {
                 HttpOnly = true,
                 Secure = true,
@@ -206,60 +150,40 @@ public sealed class AuthController : ControllerBase
 
     private SameSiteMode GetSameSiteMode()
     {
-        var sameSite =
-            _configuration["Jwt:RefreshCookieSameSite"];
-
-        return Enum.TryParse<SameSiteMode>(
-            sameSite,
-            ignoreCase: true,
-            out var result)
-            ? result
-            : SameSiteMode.None;
+        var sameSite = _configuration["Jwt:RefreshCookieSameSite"];
+        return Enum.TryParse<SameSiteMode>(sameSite, ignoreCase: true, out var result) ? result : SameSiteMode.None;
     }
     private void SetCsrfCookie()
     {
-        var csrfToken =
-            _csrfTokenService.GenerateToken();
-
-        Response.Cookies.Append(
-            CsrfTokenService.CookieName,
-            csrfToken,
-            new CookieOptions
+        var csrfToken = _csrfTokenService.GenerateToken();
+        Response.Cookies.Append(CsrfTokenService.CookieName, csrfToken, new CookieOptions
             {
                 // Angular must be able to read this token.
                 HttpOnly = false,
-
                 Secure = true,
-
                 SameSite = SameSiteMode.None,
-
-                Path = "/api/auth",
-
-                MaxAge = TimeSpan.FromDays(
-                    GetRefreshTokenDays()),
-
+                Path = "/",
+                MaxAge = TimeSpan.FromDays(GetRefreshTokenDays()),
                 IsEssential = true
             });
     }
 
     private void DeleteCsrfCookie()
     {
-        Response.Cookies.Delete(
-            CsrfTokenService.CookieName,
+        Response.Cookies.Delete(CsrfTokenService.CookieName,
             new CookieOptions
             {
                 HttpOnly = false,
                 Secure = true,
                 SameSite = SameSiteMode.None,
-                Path = "/api/auth",
+                Path = "/",
                 IsEssential = true
             });
     }
 
     private int GetRefreshTokenDays()
     {
-        return _configuration.GetValue<int?>(
-                   "Auth:RefreshTokenDays")
+        return _configuration.GetValue<int?>("Jwt:RefreshTokenDays")
                ?? 7;
     }
 }
