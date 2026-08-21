@@ -37,7 +37,7 @@ public sealed class LoginUserCommandHandler
         LoginUserCommand request,
         CancellationToken cancellationToken)
     {
-        var keyValue = _config["Jwt:RefreshTokenDays"];
+        var refreshTokenDays = _config.GetValue<int>("Jwt:RefreshTokenDays", 7);
         var email = request.Dto.Email.Trim().ToLowerInvariant();
 
         var user = await _userRepository.GetByEmailAsync(email, cancellationToken);
@@ -68,7 +68,7 @@ public sealed class LoginUserCommandHandler
             UserId = user.Id,
             TokenHash = refreshTokenHash,
             CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddDays(keyValue),
+            ExpiresAt = DateTime.UtcNow.AddDays(refreshTokenDays),
             CreatedByIp = request.IpAddress
         };
 
