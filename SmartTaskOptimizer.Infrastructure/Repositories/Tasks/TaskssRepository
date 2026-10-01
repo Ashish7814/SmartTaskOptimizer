@@ -1,0 +1,28 @@
+using SmartTaskOptimizer.Domain.Entities;
+using SmartTaskOptimizer.Shared.DTOs.Common;
+using SmartTaskOptimizer.Shared.DTOs.Tasks;
+
+namespace SmartTaskOptimizer.Domain.Repositories.Tasks;
+
+public class TaskssRepository
+{
+    private readonly List<TaskItem> _tasks = new();
+
+    public List<TaskItem> GetAll()
+    {
+        return _tasks;
+    }
+
+    public TaskItem Add(TaskItem task)
+    {
+        task.Id = _tasks.Count + 1;
+        _tasks.Add(task);
+
+        return task;
+    }
+
+    public TaskItem? GetById(int id)
+    {
+        return _tasks.FirstOrDefault(x => x.Id == id);
+    }
+}
