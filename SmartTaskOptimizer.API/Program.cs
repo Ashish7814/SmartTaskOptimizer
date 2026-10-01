@@ -411,7 +411,7 @@ builder.Services.AddScoped<IPriorityStrategy, StatusPriorityStrategy>();
 builder.Services.AddTransient<ExceptionHandlingMiddleware>();
 
 
-builder.Services.AddSingleton<TaskssRepository>();
+builder.Services.AddSingleton<ITaskssRepository, TaskssRepository>();
 
 // ============================================================
 // Build Application

@@ -25,51 +25,41 @@ namespace SmartTaskOptimizer.API.Controllers;
 [ApiController]
 public sealed class TaskController : ControllerBase
 {
-    private readonly IMediator _mediator;
-    private readonly TaskssRepository _tasks;
-    private readonly IProjectRepository _projects;
-    private readonly ICurrentUserService _currentUser;
-    private readonly IRealtimeNotifier _notifier;
-    private readonly IActivityRepository _activities;
+    private readonly ITaskssRepository _repository;
 
     public TaskController(
-        IMediator mediator,
-        TaskssRepository tasks,
-        IProjectRepository projects,
-        ICurrentUserService currentUser,
-        IRealtimeNotifier notifier,
-        IActivityRepository activities)
+        ITaskssRepository repository)
     {
-        _mediator = mediator;
-        _tasks = tasks;
-        _projects = projects;
-        _currentUser = currentUser;
-        _notifier = notifier;
-        _activities = activities;
+        _repository = repository;
     }
 
      [HttpGet]
-    public IActionResult GetTasks()
+    public IActionResult GetAll()
     {
         return Ok(_repository.GetAll());
     }
 
-    [HttpGet("{id}")]
-    public IActionResult GetTask(int id)
+    [HttpGet("{id:int}")]
+    public IActionResult GetById(int id)
     {
         var task = _repository.GetById(id);
 
-        if (task == null)
+        if (task is null)
+        {
             return NotFound();
+        }
 
         return Ok(task);
     }
 
     [HttpPost]
-    public IActionResult CreateTask(TaskItems task)
+    public IActionResult Create([FromBody] TaskItems task)
     {
         var createdTask = _repository.Add(task);
 
-        return Ok(createdTask);
+        return CreatedAtAction(
+            nameof(GetById),
+            new { id = createdTask.Id },
+            createdTask);
     }
 }

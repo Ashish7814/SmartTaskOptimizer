@@ -1,0 +1,12 @@
+using SmartTaskOptimizer.Domain.Entities;
+
+namespace SmartTaskOptimizer.Domain.Repositories.Tasks;
+
+public interface ITaskssRepository
+{
+    List<TaskItems> GetAll();
+
+    TaskItems Add(TaskItems task);
+
+    TaskItems? GetById(int id);
+}
