@@ -1,10 +1,8 @@
 using SmartTaskOptimizer.Domain.Entities;
-using SmartTaskOptimizer.Shared.DTOs.Common;
-using SmartTaskOptimizer.Shared.DTOs.Tasks;
 
 namespace SmartTaskOptimizer.Domain.Repositories.Tasks;
 
-public class TaskssRepository
+public class TaskssRepository : ITaskssRepository
 {
     private readonly List<TaskItems> _tasks = new();
 
@@ -16,6 +14,7 @@ public class TaskssRepository
     public TaskItems Add(TaskItems task)
     {
         task.Id = _tasks.Count + 1;
+
         _tasks.Add(task);
 
         return task;
