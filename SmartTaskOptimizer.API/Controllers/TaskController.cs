@@ -30,7 +30,7 @@ public sealed class TaskController : ControllerBase
     private readonly IRealtimeNotifier _notifier;
     private readonly IActivityRepository _activities;
     private readonly TaskssRepository _taskss;
-    public TaskController(IMediator mediator, ITaskRepository tasks, IProjectRepository projects, ICurrentUserService currentUser, IRealtimeNotifier notifier, IActivityRepository activities,  TaskssRepository _taskss;) { _mediator = mediator; _tasks = tasks; _projects = projects; _currentUser = currentUser; _notifier = notifier; _activities = activities;
+    public TaskController(IMediator mediator, ITaskRepository tasks, IProjectRepository projects, ICurrentUserService currentUser, IRealtimeNotifier notifier, IActivityRepository activities,  TaskssRepository taskss;) { _mediator = mediator; _tasks = tasks; _projects = projects; _currentUser = currentUser; _notifier = notifier; _activities = activities;
      _taskss = taskss;}
 
     [HttpPost]
