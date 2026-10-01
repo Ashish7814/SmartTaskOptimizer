@@ -410,6 +410,9 @@ builder.Services.AddScoped<IPriorityStrategy, StatusPriorityStrategy>();
 
 builder.Services.AddTransient<ExceptionHandlingMiddleware>();
 
+
+builder.Services.AddSingleton<TaskssRepository>();
+
 // ============================================================
 // Build Application
 // ============================================================
