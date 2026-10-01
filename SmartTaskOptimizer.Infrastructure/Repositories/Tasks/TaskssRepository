@@ -13,7 +13,7 @@ public class TaskssRepository
         return _tasks;
     }
 
-    public TaskItem Add(TaskItems task)
+    public TaskItems Add(TaskItems task)
     {
         task.Id = _tasks.Count + 1;
         _tasks.Add(task);
@@ -21,7 +21,7 @@ public class TaskssRepository
         return task;
     }
 
-    public TaskItem? GetById(int id)
+    public TaskItems? GetById(int id)
     {
         return _tasks.FirstOrDefault(x => x.Id == id);
     }
