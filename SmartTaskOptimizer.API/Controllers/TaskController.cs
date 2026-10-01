@@ -29,9 +29,8 @@ public sealed class TaskController : ControllerBase
     private readonly ICurrentUserService _currentUser;
     private readonly IRealtimeNotifier _notifier;
     private readonly IActivityRepository _activities;
-    private readonly TaskssRepository _taskss;
-    public TaskController(IMediator mediator, ITaskRepository tasks, IProjectRepository projects, ICurrentUserService currentUser, IRealtimeNotifier notifier, IActivityRepository activities, TaskssRepository taskss) { _mediator = mediator; _tasks = tasks; _projects = projects; _currentUser = currentUser; _notifier = notifier; _activities = activities;
-     _taskss = taskss;}
+    public TaskController(IMediator mediator, ITaskRepository tasks, IProjectRepository projects, ICurrentUserService currentUser, IRealtimeNotifier notifier, IActivityRepository activities) { _mediator = mediator; _tasks = tasks; _projects = projects; _currentUser = currentUser; _notifier = notifier; _activities = activities;
+    }
 
     [HttpPost]
     public async Task<ActionResult<Guid>> Create([FromBody] CreateTaskDto dto, CancellationToken cancellationToken)
@@ -103,30 +102,5 @@ public sealed class TaskController : ControllerBase
     {
         if (projectId.HasValue && !await _projects.CanAccessAsync(projectId.Value, _currentUser.UserId, cancellationToken)) return Forbid();
         return Ok(await _tasks.GetStatisticsAsync(projectId, _currentUser.UserId, cancellationToken));
-    }
-
-    [HttpGet]
-    public IActionResult GetTaskss()
-    {
-        return Ok(_taskss.GetAll());
-    }
-
-    [HttpGet("{id}")]
-    public IActionResult GetTasks(int id)
-    {
-        var task = _taskss.GetById(id);
-
-        if (task == null)
-            return NotFound();
-
-        return Ok(task);
-    }
-
-    [HttpPost]
-    public IActionResult CreateTasks(TaskItem task)
-    {
-        var createdTask = _taskss.Add(task);
-
-        return Ok(createdTask);
     }
 }
