@@ -6,14 +6,14 @@ namespace SmartTaskOptimizer.Domain.Repositories.Tasks;
 
 public class TaskssRepository
 {
-    private readonly List<TaskItem> _tasks = new();
+    private readonly List<TaskItems> _tasks = new();
 
-    public List<TaskItem> GetAll()
+    public List<TaskItems> GetAll()
     {
         return _tasks;
     }
 
-    public TaskItem Add(TaskItem task)
+    public TaskItem Add(TaskItems task)
     {
         task.Id = _tasks.Count + 1;
         _tasks.Add(task);
