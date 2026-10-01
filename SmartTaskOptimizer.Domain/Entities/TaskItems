@@ -1,6 +1,6 @@
 namespace SmartTaskOptimizer.Domain.Entities;
 
-public class TaskItem
+public class TaskItems
 {
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
